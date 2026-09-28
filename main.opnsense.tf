@@ -21,6 +21,16 @@ locals {
     for key, value in local.opnsense_hubs : key => "https://raw.githubusercontent.com/opnsense/update/${local.opnsense_bootstrap_commit_sha[key]}/src/bootstrap/opnsense-bootstrap.sh.in"
     if value.opnsense_nva.image.source_image_id == null
   }
+
+  # Generation ID: stable hash of deployment parameters.
+  # Written to /var/db/aegis/generation on the VM; CI must assert this
+  # matches the expected value to reject stale Boot Diagnostics records.
+  opnsense_bootstrap_generation = {
+    for key, value in local.opnsense_hubs : key => sha256(
+      "${key}:${local.opnsense_bootstrap_release[key]}:${local.opnsense_bootstrap_commit_sha[key]}:${local.opnsense_router_ip_addresses[key]}"
+    )
+    if value.opnsense_nva.image.source_image_id == null
+  }
 }
 
 module "opnsense_nva" {
@@ -84,10 +94,27 @@ resource "azapi_resource" "opnsense_bootstrap_ext" {
         script = base64encode(<<-SCRIPT
           #!/bin/sh
           set -e
-          echo "[opnsense/${each.key}] preparing pinned OPNsense ${local.opnsense_bootstrap_release[each.key]} bootstrap"
+          echo "[opnsense/${each.key}] stage1: preparing bootstrap state machine"
 
           # ------------------------------------------------------------------
-          # Fetch pinned bootstrap script
+          # Persistent state directory — survives opnsense-bootstrap conversion
+          # /var/db/ is preserved; /var/db/pkg/ is wiped but /var/db/aegis/ is not.
+          # Do NOT use /tmp (cleared on boot) or /conf (wiped by bootstrap -f).
+          # ------------------------------------------------------------------
+          AEGIS_STATE_DIR="/var/db/aegis"
+          mkdir -p "$AEGIS_STATE_DIR"
+
+          # Generation ID: hash of deployment parameters for stale-record rejection.
+          # CI must assert generation matches before accepting a READY attestation.
+          GENERATION="${sha256("${each.key}:${local.opnsense_bootstrap_release[each.key]}:${local.opnsense_bootstrap_commit_sha[each.key]}:${local.opnsense_router_ip_addresses[each.key]}")}"
+          echo "$GENERATION" > "$AEGIS_STATE_DIR/generation"
+
+          # Persist PREPARED state — visible to all subsequent stages
+          echo "PREPARED" > "$AEGIS_STATE_DIR/state"
+          echo "[opnsense/${each.key}] state=PREPARED generation=$GENERATION"
+
+          # ------------------------------------------------------------------
+          # Fetch pinned bootstrap script (retry for NAT GW association delay)
           # ------------------------------------------------------------------
           for attempt in 1 2 3; do
             fetch -o /usr/local/sbin/opnsense-bootstrap.sh "${local.opnsense_bootstrap_urls[each.key]}" && break
@@ -97,11 +124,13 @@ resource "azapi_resource" "opnsense_bootstrap_ext" {
           chmod 700 /usr/local/sbin/opnsense-bootstrap.sh
 
           # ------------------------------------------------------------------
-          # Install aegis-opnsense-ready verifier
+          # Install aegis-opnsense-ready verifier (runs AFTER final OPNsense boot)
           #
-          # Terraform values interpolated directly (not via shell vars) to
-          # avoid ambiguity with Terraform template engine.
-          # Shell variables inside the nested RCEOF heredoc use dollar-brace escaping.
+          # Fires when /var/run/booting vanishes (rc.bootup complete) AND all
+          # runtime assertions pass. Emits one JSON line to /dev/console →
+          # Azure Boot Diagnostics. Idempotent: re-emits on subsequent reboots
+          # with same generation until explicitly uninstalled.
+          # Terraform values are interpolated here; RCEOF shell vars use \$$ escaping.
           # ------------------------------------------------------------------
           cat > /usr/local/etc/rc.d/aegis_opnsense_ready <<RCEOF
           #!/bin/sh
@@ -116,47 +145,58 @@ resource "azapi_resource" "opnsense_bootstrap_ext" {
           start_cmd="\$${name}_start"
 
           aegis_opnsense_ready_start() {
-            # Wait for /var/run/booting to vanish — OPNsense rc.bootup writes
-            # and removes this file; its absence means full boot is complete.
+            local state_dir="/var/db/aegis"
+            local generation=\$$(cat "\$${state_dir}/generation" 2>/dev/null || echo "unknown")
+
+            # Wait for /var/run/booting to vanish — prerequisite only.
+            # READY is determined by all assertions below, not by this sentinel alone.
             local attempts=0
             while [ -f /var/run/booting ] && [ \$${attempts} -lt 30 ]; do
               sleep 10
               attempts=\$$(( attempts + 1 ))
             done
 
-            # --- Assert: release version ---
+            # --- Assert: OPNsense release version ---
             local actual_release=\$$(opnsense-version -v 2>/dev/null | awk '{print \$$1}')
             local release_ok="false"
             [ "\$${actual_release}" = "${local.opnsense_bootstrap_release[each.key]}" ] && release_ok="true"
 
-            # --- Assert: IP forwarding enabled ---
+            # --- Assert: IP forwarding enabled (FreeBSD sysctl) ---
             local fwd_val=\$$(sysctl -n net.inet.ip.forwarding 2>/dev/null)
             local forwarding_ok="false"
             [ "\$${fwd_val}" = "1" ] && forwarding_ok="true"
 
-            # --- Assert: PF is active ---
+            # --- Assert: PF packet filter is active ---
             local pf_status=\$$(pfctl -si 2>/dev/null | grep -i "^Status:" | awk '{print \$$2}')
             local pf_ok="false"
             [ "\$${pf_status}" = "Enabled" ] && pf_ok="true"
 
-            # --- Assert: router IP is assigned to an interface ---
+            # --- Assert: canonical router IP assigned to an interface ---
             local ip_ok="false"
             ifconfig | grep -q "${local.opnsense_router_ip_addresses[each.key]}" && ip_ok="true"
 
-            # --- Assert: bootstrap rc.d no longer pending ---
+            # --- Assert: bootstrap rc.d no longer pending (conversion complete) ---
             local bootstrap_pending="false"
             [ -f /usr/local/etc/rc.d/opnsense_bootstrap ] && bootstrap_pending="true"
 
+            # --- All assertions must pass before emitting READY ---
+            # Emit regardless (so CI can see partial failures), but only transition
+            # state to READY when all fields are true.
+            if [ "\$${release_ok}" = "true" ] && [ "\$${forwarding_ok}" = "true" ] && \
+               [ "\$${pf_ok}" = "true" ] && [ "\$${ip_ok}" = "true" ] && \
+               [ "\$${bootstrap_pending}" = "false" ]; then
+              echo "READY" > "\$${state_dir}/state"
+            fi
+
             # --- Emit structured attestation to console (→ Boot Diagnostics) ---
-            printf 'AEGIS_OPNSENSE_READY {"release":"%s","release_ok":%s,"router_ip":"%s","ip_ok":%s,"forwarding":%s,"pf":%s,"bootstrap_pending":%s}\n' \
+            # generation field allows CI to reject stale records from prior deployments.
+            printf 'AEGIS_OPNSENSE_READY {"generation":"%s","release":"%s","release_ok":%s,"router_ip":"%s","ip_ok":%s,"forwarding":%s,"pf":%s,"bootstrap_pending":%s}\n' \
+              "\$${generation}" \
               "\$${actual_release}" "\$${release_ok}" \
               "${local.opnsense_router_ip_addresses[each.key]}" "\$${ip_ok}" \
               "\$${forwarding_ok}" "\$${pf_ok}" \
               "\$${bootstrap_pending}" \
               > /dev/console
-
-            # Remove self — attestation runs exactly once per deployment
-            rm -f /usr/local/etc/rc.d/aegis_opnsense_ready
           }
 
           load_rc_config \$${name}
@@ -166,21 +206,47 @@ resource "azapi_resource" "opnsense_bootstrap_ext" {
           chmod 700 /usr/local/etc/rc.d/aegis_opnsense_ready
 
           # ------------------------------------------------------------------
-          # Schedule opnsense-bootstrap via firstboot rc.d
-          # (runs AFTER aegis_opnsense_ready is installed; verifier will fire
-          # on the second reboot after OPNsense conversion is complete)
+          # Install bootstrap hook
+          #
+          # CRITICAL ordering contract:
+          #   1. Atomically write BOOTSTRAPPING state BEFORE calling bootstrap.
+          #   2. opnsense-bootstrap will reboot the system — code after the call
+          #      is NOT guaranteed to execute. No required cleanup may appear
+          #      after the bootstrap call.
+          #   3. The verifier (aegis_opnsense_ready) runs on the FINAL boot
+          #      and reconciles state from BOOTSTRAPPING to READY.
           # ------------------------------------------------------------------
-          cat > /usr/local/etc/rc.d/opnsense_bootstrap <<'EOF'
+          cat > /usr/local/etc/rc.d/opnsense_bootstrap <<BSEOF
           #!/bin/sh
           # PROVIDE: opnsense_bootstrap
           # REQUIRE: NETWORKING
+          # KEYWORD: nojail
+
+          state_dir="/var/db/aegis"
+
+          # Idempotency guard: skip if already past PREPARED state
+          current_state=\$$(cat "\$${state_dir}/state" 2>/dev/null || echo "")
+          if [ "\$${current_state}" != "PREPARED" ]; then
+            echo "[aegis] bootstrap: state=\$${current_state}, skipping (already beyond PREPARED)"
+            rm -f /usr/local/etc/rc.d/opnsense_bootstrap
+            exit 0
+          fi
+
+          # Atomically persist BOOTSTRAPPING BEFORE calling bootstrap.
+          # If bootstrap reboots mid-execution this state survives.
+          echo "BOOTSTRAPPING" > "\$${state_dir}/state"
+          echo "[aegis] bootstrap: state=BOOTSTRAPPING, starting opnsense-bootstrap"
+
+          # Execute bootstrap — this WILL reboot; nothing after this is reliable.
           /usr/local/sbin/opnsense-bootstrap.sh -r ${local.opnsense_bootstrap_release[each.key]} -y
-          rc=$?
-          echo "$rc" > /var/db/opnsense-bootstrap.exit
-          rm -f /usr/local/etc/rc.d/opnsense_bootstrap
-          exit "$rc"
-          EOF
+          BSEOF
           chmod 700 /usr/local/etc/rc.d/opnsense_bootstrap
+
+          # ------------------------------------------------------------------
+          # Request reboot — CSE exits cleanly after scheduling.
+          # Stage 1 is complete.
+          # ------------------------------------------------------------------
+          echo "[opnsense/${each.key}] stage1 complete: verifier and bootstrap hook installed"
           shutdown -r +1 "OPNsense bootstrap scheduled"
         SCRIPT
         )
