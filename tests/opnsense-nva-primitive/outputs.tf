@@ -86,3 +86,9 @@ output "opnsense_bootstrap_release" {
   value       = "25.1"
   description = "The OPNsense release expected in the AEGIS_OPNSENSE_READY attestation."
 }
+
+
+output "expected_generation" {
+  value       = local.bootstrap_generation
+  description = "Expected generation ID in AEGIS_OPNSENSE_READY attestation. CI must assert attestation.generation == this value to reject stale Boot Diagnostics records."
+}

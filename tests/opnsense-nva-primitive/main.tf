@@ -91,70 +91,14 @@ locals {
 
   # Bootstrap tuple — candidate, pending integration run confirmation.
   # Pinned bootstrap commit: da1985064501 (2025-05-07)
-  #   Last stable commit before FreeBSD 15 / pkgbase work landed.
-  #   Source: https://github.com/opnsense/update/blob/da1985064501/src/bootstrap/opnsense-bootstrap.sh.in
   bootstrap_commit = "da1985064501be4e7e7f35c073f21b5b3a17a6f5"
   opnsense_release = "25.1"
   bootstrap_url    = "https://raw.githubusercontent.com/opnsense/update/${local.bootstrap_commit}/src/bootstrap/opnsense-bootstrap.sh.in"
 
-  # Two-stage bootstrap design:
-  #
-  # Stage 1 — CSE script (this) runs, fetches bootstrap, schedules it as a
-  #            one-shot rc.local job, then EXITS SUCCESSFULLY before bootstrap
-  #            triggers. This avoids the known CSE + reboot incompatibility:
-  #            opnsense-bootstrap causes a reboot; CSE must not be running
-  #            across that reboot boundary.
-  #            Ref: https://learn.microsoft.com/azure/virtual-machines/extensions/custom-script-linux
-  #                 "Do not restart waagent or the VM from within the script."
-  #
-  # Stage 2 — On next boot, rc.local executes bootstrap, FreeBSD converts to
-  #            OPNsense, writes /tmp/opnsense-bootstrap-done with version,
-  #            then reboots into OPNsense.
-  #
-  # Post-boot assertion (CI step "L3 Smoke — OPNsense Version") polls the
-  # Azure Serial Console output or a health endpoint rather than CSE status,
-  # because CSE completes (stage 1) before the actual conversion.
-  #
-  # CSE publisher/version: Microsoft.OSTCExtensions.CustomScriptForLinux v1.x
-  #   — This is the version with documented FreeBSD support.
-  #   — v2.x (Microsoft.Azure.Extensions.CustomScript) does NOT list FreeBSD
-  #     in its supported OS matrix; using v1.x until v2.x FreeBSD support is
-  #     confirmed by official Microsoft documentation.
-  #   Source: https://learn.microsoft.com/azure/virtual-machines/extensions/custom-script-linux
-  #
-  bootstrap_stage1_script = <<-SCRIPT
-    #!/bin/sh
-    set -e
-    echo "[001] Stage 1: scheduling OPNsense ${local.opnsense_release} bootstrap at $(date)"
-
-    # Retry fetch — NAT GW may take a moment to associate after VM boot
-    for i in 1 2 3; do
-      fetch -o /usr/local/sbin/opnsense-bootstrap.sh "${local.bootstrap_url}" && break
-      echo "[001] fetch attempt $i failed, waiting 15s..."
-      sleep 15
-    done
-    chmod +x /usr/local/sbin/opnsense-bootstrap.sh
-
-    # Schedule bootstrap to run once on next boot via rc.local.
-    # This ensures CSE exits before the reboot that bootstrap triggers.
-    cat > /usr/local/etc/rc.d/opnsense_bootstrap << 'EOF'
-    #!/bin/sh
-    # PROVIDE: opnsense_bootstrap
-    # REQUIRE: NETWORKING
-    # KEYWORD: firstboot
-    /usr/local/sbin/opnsense-bootstrap.sh -r ${local.opnsense_release} -y \
-      && echo "$(date): bootstrap OK" > /tmp/opnsense-bootstrap-done \
-      || echo "$(date): bootstrap FAILED" > /tmp/opnsense-bootstrap-failed
-    # Remove self so it only runs once
-    rm /usr/local/etc/rc.d/opnsense_bootstrap
-    EOF
-    chmod +x /usr/local/etc/rc.d/opnsense_bootstrap
-
-    echo "[001] Stage 1 complete — bootstrap scheduled for next boot at $(date)"
-    echo "stage1-complete" > /tmp/opnsense-stage1-done
-    # Reboot to trigger stage 2
-    shutdown -r +1 "OPNsense bootstrap scheduled"
-  SCRIPT
+  # Generation ID — same formula as main.opnsense.tf opnsense_bootstrap_generation local.
+  # Key components: hub_key(="primitive"), release, commit_sha, router_ip.
+  # CI must assert attestation.generation == this value to reject stale records.
+  bootstrap_generation = sha256("primitive:${local.opnsense_release}:${local.bootstrap_commit}:${local.opnsense_private_ip}")
 }
 
 # -----------------------------------------------------------------------------
@@ -402,7 +346,115 @@ resource "azapi_resource" "bootstrap_ext" {
       typeHandlerVersion      = "1.5"
       autoUpgradeMinorVersion = true
       settings = {
-        script = base64encode(local.bootstrap_stage1_script)
+        # Same state machine contract as main.opnsense.tf (root PTN).
+        # Adapted for single-hub locals; generation uses key="primitive".
+        script = base64encode(<<-SCRIPT
+          #!/bin/sh
+          set -e
+          echo "[001] stage1: preparing bootstrap state machine"
+
+          AEGIS_STATE_DIR="/var/db/aegis"
+          mkdir -p "$AEGIS_STATE_DIR"
+
+          GENERATION="${local.bootstrap_generation}"
+          echo "$GENERATION" > "$AEGIS_STATE_DIR/generation"
+          echo "PREPARED" > "$AEGIS_STATE_DIR/state"
+          echo "[001] state=PREPARED generation=$GENERATION"
+
+          for attempt in 1 2 3; do
+            fetch -o /usr/local/sbin/opnsense-bootstrap.sh "${local.bootstrap_url}" && break
+            [ "$attempt" -lt 3 ] || exit 1
+            sleep 15
+          done
+          chmod 700 /usr/local/sbin/opnsense-bootstrap.sh
+
+          cat > /usr/local/etc/rc.d/aegis_opnsense_ready <<RCEOF
+          #!/bin/sh
+          # PROVIDE: aegis_opnsense_ready
+          # REQUIRE: NETWORKING
+          # KEYWORD: nojail
+
+          . /etc/rc.subr
+
+          name="aegis_opnsense_ready"
+          rcvar=\$${name}_enable
+          start_cmd="\$${name}_start"
+
+          aegis_opnsense_ready_start() {
+            local state_dir="/var/db/aegis"
+            local generation=\$$(cat "\$${state_dir}/generation" 2>/dev/null || echo "unknown")
+
+            local attempts=0
+            while [ -f /var/run/booting ] && [ \$${attempts} -lt 30 ]; do
+              sleep 10
+              attempts=\$$(( attempts + 1 ))
+            done
+
+            local actual_release=\$$(opnsense-version -v 2>/dev/null | awk '{print \$$1}')
+            local release_ok="false"
+            [ "\$${actual_release}" = "${local.opnsense_release}" ] && release_ok="true"
+
+            local fwd_val=\$$(sysctl -n net.inet.ip.forwarding 2>/dev/null)
+            local forwarding_ok="false"
+            [ "\$${fwd_val}" = "1" ] && forwarding_ok="true"
+
+            local pf_status=\$$(pfctl -si 2>/dev/null | grep -i "^Status:" | awk '{print \$$2}')
+            local pf_ok="false"
+            [ "\$${pf_status}" = "Enabled" ] && pf_ok="true"
+
+            local ip_ok="false"
+            ifconfig | grep -q "${local.opnsense_private_ip}" && ip_ok="true"
+
+            local bootstrap_pending="false"
+            [ -f /usr/local/etc/rc.d/opnsense_bootstrap ] && bootstrap_pending="true"
+
+            if [ "\$${release_ok}" = "true" ] && [ "\$${forwarding_ok}" = "true" ] && \
+               [ "\$${pf_ok}" = "true" ] && [ "\$${ip_ok}" = "true" ] && \
+               [ "\$${bootstrap_pending}" = "false" ]; then
+              echo "READY" > "\$${state_dir}/state"
+            fi
+
+            printf 'AEGIS_OPNSENSE_READY {"generation":"%s","release":"%s","release_ok":%s,"router_ip":"%s","ip_ok":%s,"forwarding":%s,"pf":%s,"bootstrap_pending":%s}\n' \
+              "\$${generation}" \
+              "\$${actual_release}" "\$${release_ok}" \
+              "${local.opnsense_private_ip}" "\$${ip_ok}" \
+              "\$${forwarding_ok}" "\$${pf_ok}" \
+              "\$${bootstrap_pending}" \
+              > /dev/console
+          }
+
+          load_rc_config \$${name}
+          : \$${aegis_opnsense_ready_enable:=YES}
+          run_rc_command "\$$1"
+          RCEOF
+          chmod 700 /usr/local/etc/rc.d/aegis_opnsense_ready
+
+          cat > /usr/local/etc/rc.d/opnsense_bootstrap <<BSEOF
+          #!/bin/sh
+          # PROVIDE: opnsense_bootstrap
+          # REQUIRE: NETWORKING
+          # KEYWORD: nojail
+
+          state_dir="/var/db/aegis"
+
+          current_state=\$$(cat "\$${state_dir}/state" 2>/dev/null || echo "")
+          if [ "\$${current_state}" != "PREPARED" ]; then
+            echo "[aegis] bootstrap: state=\$${current_state}, skipping"
+            rm -f /usr/local/etc/rc.d/opnsense_bootstrap
+            exit 0
+          fi
+
+          echo "BOOTSTRAPPING" > "\$${state_dir}/state"
+          echo "[aegis] bootstrap: state=BOOTSTRAPPING, starting opnsense-bootstrap"
+
+          /usr/local/sbin/opnsense-bootstrap.sh -r ${local.opnsense_release} -y
+          BSEOF
+          chmod 700 /usr/local/etc/rc.d/opnsense_bootstrap
+
+          echo "[001] stage1 complete"
+          shutdown -r +1 "OPNsense bootstrap scheduled"
+        SCRIPT
+        )
       }
     }
   }

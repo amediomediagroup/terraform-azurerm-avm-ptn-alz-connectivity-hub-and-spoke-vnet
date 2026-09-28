@@ -259,9 +259,11 @@ jobs:
           RG=$(terraform output -raw resource_group_name)
           VM_NAME=$(terraform output -raw opnsense_vm_name || basename "$(terraform output -raw opnsense_vm_id)")
           EXPECTED_RELEASE=$(terraform output -raw opnsense_bootstrap_release 2>/dev/null || echo "25.1")
+          EXPECTED_GENERATION=$(terraform output -raw expected_generation)
 
           echo "Polling Boot Diagnostics for AEGIS_OPNSENSE_READY token..."
           echo "VM: $VM_NAME  RG: $RG  expected release: $EXPECTED_RELEASE"
+          echo "Expected generation: $EXPECTED_GENERATION"
 
           # Poll up to 15 minutes (45 × 20s). The attestation fires after:
           #   CSE reboot (1) → opnsense-bootstrap → conversion reboot (2)
@@ -272,17 +274,34 @@ jobs:
               --resource-group "$RG" \
               --name "$VM_NAME" \
               --output tsv 2>/dev/null || echo "")
-            READY_LINE=$(echo "$LOG" | grep "AEGIS_OPNSENSE_READY" | tail -1)
+
+            # Find READY lines matching the expected generation (rejects stale records)
+            READY_LINE=$(echo "$LOG" | grep "AEGIS_OPNSENSE_READY" | \
+              python3 -c "
+import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if 'AEGIS_OPNSENSE_READY' not in line:
+        continue
+    try:
+        payload = json.loads(line.split('AEGIS_OPNSENSE_READY ', 1)[1])
+        if payload.get('generation') == '$EXPECTED_GENERATION':
+            print(line)
+            break
+    except Exception:
+        pass
+" 2>/dev/null | tail -1)
+
             if [ -n "$READY_LINE" ]; then
-              echo "✅ Attestation received: $READY_LINE"
+              echo "✅ Attestation received (generation matches): $READY_LINE"
               break
             fi
-            echo "  attempt $i/45: AEGIS_OPNSENSE_READY not yet in boot log — waiting 20s..."
+            echo "  attempt $i/45: no matching AEGIS_OPNSENSE_READY — waiting 20s..."
             sleep 20
           done
 
           if [ -z "$READY_LINE" ]; then
-            echo "::error::AEGIS_OPNSENSE_READY never appeared in boot diagnostics after 15 minutes"
+            echo "::error::AEGIS_OPNSENSE_READY with generation=$EXPECTED_GENERATION never appeared after 15 minutes"
             echo "Last boot log (tail):"
             az vm boot-diagnostics get-boot-log \
               --resource-group "$RG" \
@@ -307,11 +326,12 @@ jobs:
             fi
           }
 
-          assert_field "release_ok"         "true"
-          assert_field "ip_ok"              "true"
-          assert_field "forwarding"         "true"
-          assert_field "pf"                 "true"
-          assert_field "bootstrap_pending"  "false"
+          assert_field "generation"        "$EXPECTED_GENERATION"
+          assert_field "release_ok"        "true"
+          assert_field "ip_ok"             "true"
+          assert_field "forwarding"        "true"
+          assert_field "pf"                "true"
+          assert_field "bootstrap_pending" "false"
 
           ACTUAL_RELEASE=$(echo "$PAYLOAD" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('release',''))" 2>/dev/null)
           if [ "$ACTUAL_RELEASE" != "$EXPECTED_RELEASE" ]; then
