@@ -75,3 +75,14 @@ output "expected_next_hop_ip" {
   value       = local.opnsense_private_ip
   description = "The expected next-hop IP in effective routes for snet-test NICs."
 }
+
+
+output "opnsense_vm_name" {
+  value       = module.opnsense.name
+  description = "The name of the OPNsense VM. Used by CI to query Boot Diagnostics."
+}
+
+output "opnsense_bootstrap_release" {
+  value       = "25.1"
+  description = "The OPNsense release expected in the AEGIS_OPNSENSE_READY attestation."
+}

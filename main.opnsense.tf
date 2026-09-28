@@ -85,12 +85,91 @@ resource "azapi_resource" "opnsense_bootstrap_ext" {
           #!/bin/sh
           set -e
           echo "[opnsense/${each.key}] preparing pinned OPNsense ${local.opnsense_bootstrap_release[each.key]} bootstrap"
+
+          # ------------------------------------------------------------------
+          # Fetch pinned bootstrap script
+          # ------------------------------------------------------------------
           for attempt in 1 2 3; do
             fetch -o /usr/local/sbin/opnsense-bootstrap.sh "${local.opnsense_bootstrap_urls[each.key]}" && break
             [ "$attempt" -lt 3 ] || exit 1
             sleep 15
           done
           chmod 700 /usr/local/sbin/opnsense-bootstrap.sh
+
+          # ------------------------------------------------------------------
+          # Install aegis-opnsense-ready verifier
+          #
+          # Terraform values interpolated directly (not via shell vars) to
+          # avoid ambiguity with Terraform template engine.
+          # Shell variables inside the nested RCEOF heredoc use dollar-brace escaping.
+          # ------------------------------------------------------------------
+          cat > /usr/local/etc/rc.d/aegis_opnsense_ready <<RCEOF
+          #!/bin/sh
+          # PROVIDE: aegis_opnsense_ready
+          # REQUIRE: NETWORKING
+          # KEYWORD: nojail
+
+          . /etc/rc.subr
+
+          name="aegis_opnsense_ready"
+          rcvar=\$${name}_enable
+          start_cmd="\$${name}_start"
+
+          aegis_opnsense_ready_start() {
+            # Wait for /var/run/booting to vanish — OPNsense rc.bootup writes
+            # and removes this file; its absence means full boot is complete.
+            local attempts=0
+            while [ -f /var/run/booting ] && [ \$${attempts} -lt 30 ]; do
+              sleep 10
+              attempts=\$$(( attempts + 1 ))
+            done
+
+            # --- Assert: release version ---
+            local actual_release=\$$(opnsense-version -v 2>/dev/null | awk '{print \$$1}')
+            local release_ok="false"
+            [ "\$${actual_release}" = "${local.opnsense_bootstrap_release[each.key]}" ] && release_ok="true"
+
+            # --- Assert: IP forwarding enabled ---
+            local fwd_val=\$$(sysctl -n net.inet.ip.forwarding 2>/dev/null)
+            local forwarding_ok="false"
+            [ "\$${fwd_val}" = "1" ] && forwarding_ok="true"
+
+            # --- Assert: PF is active ---
+            local pf_status=\$$(pfctl -si 2>/dev/null | grep -i "^Status:" | awk '{print \$$2}')
+            local pf_ok="false"
+            [ "\$${pf_status}" = "Enabled" ] && pf_ok="true"
+
+            # --- Assert: router IP is assigned to an interface ---
+            local ip_ok="false"
+            ifconfig | grep -q "${local.opnsense_router_ip_addresses[each.key]}" && ip_ok="true"
+
+            # --- Assert: bootstrap rc.d no longer pending ---
+            local bootstrap_pending="false"
+            [ -f /usr/local/etc/rc.d/opnsense_bootstrap ] && bootstrap_pending="true"
+
+            # --- Emit structured attestation to console (→ Boot Diagnostics) ---
+            printf 'AEGIS_OPNSENSE_READY {"release":"%s","release_ok":%s,"router_ip":"%s","ip_ok":%s,"forwarding":%s,"pf":%s,"bootstrap_pending":%s}\n' \
+              "\$${actual_release}" "\$${release_ok}" \
+              "${local.opnsense_router_ip_addresses[each.key]}" "\$${ip_ok}" \
+              "\$${forwarding_ok}" "\$${pf_ok}" \
+              "\$${bootstrap_pending}" \
+              > /dev/console
+
+            # Remove self — attestation runs exactly once per deployment
+            rm -f /usr/local/etc/rc.d/aegis_opnsense_ready
+          }
+
+          load_rc_config \$${name}
+          : \$${aegis_opnsense_ready_enable:=YES}
+          run_rc_command "\$$1"
+          RCEOF
+          chmod 700 /usr/local/etc/rc.d/aegis_opnsense_ready
+
+          # ------------------------------------------------------------------
+          # Schedule opnsense-bootstrap via firstboot rc.d
+          # (runs AFTER aegis_opnsense_ready is installed; verifier will fire
+          # on the second reboot after OPNsense conversion is complete)
+          # ------------------------------------------------------------------
           cat > /usr/local/etc/rc.d/opnsense_bootstrap <<'EOF'
           #!/bin/sh
           # PROVIDE: opnsense_bootstrap

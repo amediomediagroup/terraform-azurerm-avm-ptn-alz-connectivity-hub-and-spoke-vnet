@@ -248,6 +248,80 @@ jobs:
           echo "NOTE: OPNsense installation completes post-reboot. Tuple is"
           echo "      candidate until integration run confirms version output."
 
+      - name: L3 OPNsense READY — Boot Diagnostics Attestation
+        working-directory: tests/opnsense-nva-primitive
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: true
+        run: |
+          RG=$(terraform output -raw resource_group_name)
+          VM_NAME=$(terraform output -raw opnsense_vm_name || basename "$(terraform output -raw opnsense_vm_id)")
+          EXPECTED_RELEASE=$(terraform output -raw opnsense_bootstrap_release 2>/dev/null || echo "25.1")
+
+          echo "Polling Boot Diagnostics for AEGIS_OPNSENSE_READY token..."
+          echo "VM: $VM_NAME  RG: $RG  expected release: $EXPECTED_RELEASE"
+
+          # Poll up to 15 minutes (45 × 20s). The attestation fires after:
+          #   CSE reboot (1) → opnsense-bootstrap → conversion reboot (2)
+          #   → OPNsense first boot → /var/run/booting removed → rc.d fires.
+          READY_LINE=""
+          for i in $(seq 1 45); do
+            LOG=$(az vm boot-diagnostics get-boot-log \
+              --resource-group "$RG" \
+              --name "$VM_NAME" \
+              --output tsv 2>/dev/null || echo "")
+            READY_LINE=$(echo "$LOG" | grep "AEGIS_OPNSENSE_READY" | tail -1)
+            if [ -n "$READY_LINE" ]; then
+              echo "✅ Attestation received: $READY_LINE"
+              break
+            fi
+            echo "  attempt $i/45: AEGIS_OPNSENSE_READY not yet in boot log — waiting 20s..."
+            sleep 20
+          done
+
+          if [ -z "$READY_LINE" ]; then
+            echo "::error::AEGIS_OPNSENSE_READY never appeared in boot diagnostics after 15 minutes"
+            echo "Last boot log (tail):"
+            az vm boot-diagnostics get-boot-log \
+              --resource-group "$RG" \
+              --name "$VM_NAME" \
+              --output tsv 2>/dev/null | tail -30 || true
+            exit 1
+          fi
+
+          # Parse and assert all fields
+          PAYLOAD=$(echo "$READY_LINE" | sed 's/.*AEGIS_OPNSENSE_READY //')
+
+          assert_field() {
+            local field="$1" expected="$2"
+            local actual
+            actual=$(echo "$PAYLOAD" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$field',''))" 2>/dev/null)
+            if [ "$actual" = "$expected" ]; then
+              echo "  ✅ $field = $actual"
+            else
+              echo "::error::$field: expected '$expected', got '$actual'"
+              echo "  Full payload: $PAYLOAD"
+              exit 1
+            fi
+          }
+
+          assert_field "release_ok"         "true"
+          assert_field "ip_ok"              "true"
+          assert_field "forwarding"         "true"
+          assert_field "pf"                 "true"
+          assert_field "bootstrap_pending"  "false"
+
+          ACTUAL_RELEASE=$(echo "$PAYLOAD" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('release',''))" 2>/dev/null)
+          if [ "$ACTUAL_RELEASE" != "$EXPECTED_RELEASE" ]; then
+            echo "::error::release: expected '$EXPECTED_RELEASE', got '$ACTUAL_RELEASE'"
+            exit 1
+          fi
+          echo "  ✅ release = $ACTUAL_RELEASE"
+
+          echo "✅ OPNsense READY attestation PASSED"
+
       - name: L3 Smoke - NIC IP Forwarding Enabled
         working-directory: tests/opnsense-nva-primitive
         env:
