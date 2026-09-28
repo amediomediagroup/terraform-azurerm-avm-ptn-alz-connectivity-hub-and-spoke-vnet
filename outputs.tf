@@ -58,6 +58,25 @@ output "dns_server_ip_addresses" {
   value       = { for key, value in local.hub_virtual_networks : key => value.hub_router_ip_address != null ? value.hub_router_ip_address : (local.firewall_enabled[key] ? module.hub_and_spoke_vnet.firewalls[key].private_ip_address : null) }
 }
 
+output "hub_router_ip_addresses" {
+  description = "Canonical router next-hop IP addresses for each hub. Managed OPNsense addresses are derived from the configured NVA subnet."
+  value = {
+    for key, value in local.hub_virtual_networks : key => value.hub_router_ip_address != null ? value.hub_router_ip_address : (
+      local.firewall_enabled[key] ? module.hub_and_spoke_vnet.firewalls[key].private_ip_address : null
+    )
+  }
+}
+
+output "opnsense_nva_private_ip_addresses" {
+  description = "Canonical private IP addresses of the managed OPNsense NVA instances, grouped by hub key."
+  value       = local.opnsense_router_ip_addresses
+}
+
+output "opnsense_nva_resource_ids" {
+  description = "Resource IDs of the managed OPNsense NVA virtual machines, grouped by hub key."
+  value       = { for key, nva in module.opnsense_nva : key => nva.resource_id }
+}
+
 output "firewall_policies" {
   description = "Firewall policies for each hub virtual network."
   value       = module.hub_and_spoke_vnet.firewall_policies

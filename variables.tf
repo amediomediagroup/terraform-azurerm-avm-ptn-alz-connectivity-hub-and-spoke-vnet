@@ -115,8 +115,10 @@ DESCRIPTION
 variable "hub_virtual_networks" {
   type = map(object({
     enabled_resources = optional(object({
-      firewall                              = optional(bool, true)
-      firewall_policy                       = optional(bool, true)
+      # Null preserves the historical true default while allowing managed
+      # OPNsense mode to distinguish omitted from explicitly enabled Firewall.
+      firewall                              = optional(bool)
+      firewall_policy                       = optional(bool)
       bastion                               = optional(bool, true)
       virtual_network_gateway_express_route = optional(bool, true)
       virtual_network_gateway_vpn           = optional(bool, true)
@@ -124,6 +126,7 @@ variable "hub_virtual_networks" {
       private_dns_resolver                  = optional(bool, true)
       dns_resolver_policy                   = optional(bool, true)
       nat_gateway                           = optional(bool, false)
+      opnsense_nva                          = optional(bool, false)
     }), {})
 
     default_hub_address_space = optional(string)
@@ -858,6 +861,27 @@ variable "hub_virtual_networks" {
       }))
       tags = optional(map(string), null)
     }), null)
+
+    opnsense_nva = optional(object({
+      name = optional(string)
+      subnet = optional(object({
+        address_prefix = optional(string)
+        router_host    = optional(number, 4)
+      }), {})
+      compute = optional(object({
+        vm_size              = optional(string)
+        zone                 = optional(string)
+        admin_ssh_public_key = optional(string)
+      }), {})
+      image = optional(object({
+        source_image_id = optional(string)
+      }), {})
+      bootstrap = optional(object({
+        release    = optional(string)
+        commit_sha = optional(string)
+      }), {})
+      tags = optional(map(string))
+    }), {})
   }))
   default     = {}
   description = <<DESCRIPTION
@@ -866,15 +890,16 @@ A map of hub networks to create.
 The following top level attributes are supported:
 
   - `enabled_resources` - (Optional) An object that controls which resources are enabled for this hub. The object has the following fields:
-    - `firewall` - (Optional) Should the Azure Firewall be created? Default `true`.
-    - `firewall_policy` - (Optional) Should the Azure Firewall Policy be created? Default `true`.
+    - `firewall` - (Optional) Should the Azure Firewall be created? Default `true` for legacy hubs; managed OPNsense mode disables it and rejects an explicit `true`.
+    - `firewall_policy` - (Optional) Should the Azure Firewall Policy be created? Default `true` for legacy hubs; managed OPNsense mode disables it and rejects an explicit `true`.
     - `bastion` - (Optional) Should the Azure Bastion be created? Default `true`.
     - `virtual_network_gateway_express_route` - (Optional) Should the ExpressRoute gateway be created? Default `true`.
     - `virtual_network_gateway_vpn` - (Optional) Should the VPN gateway be created? Default `true`.
     - `private_dns_zones` - (Optional) Should private DNS zones be created? Default `true`.
     - `private_dns_resolver` - (Optional) Should the private DNS resolver be created? Default `true`.
     - `dns_resolver_policy` - (Optional) Should the DNS resolver policy (DNS Security Policy) be created? Default `true`.
-    - `nat_gateway` - (Optional) Should the NAT Gateway be created? Default `true`.
+    - `nat_gateway` - (Optional) Should the NAT Gateway be created? Default `false`; managed OPNsense automatically enables a root-owned NAT Gateway for outbound bootstrap.
+    - `opnsense_nva` - (Optional) Should a managed OPNsense NVA be deployed as this hub's router? Default `false`.
   - `default_hub_address_space` - (Optional) The default address space to use if not specified in hub_virtual_network. This defaults to `10.0.0.0/16` and increments to the next /16 for each region if not supplied.
   - `default_parent_id` - (Optional) The default parent resource group ID to use if not specified in hub_virtual_network or individual sections.
   - `location` - (Required) The Azure location where the hub network resources should be created.
@@ -1511,6 +1536,19 @@ The following top level attributes are supported:
     - `kind` - (Required) The type of lock. Possible values are `CanNotDelete` and `ReadOnly`.
     - `name` - (Optional) The name of the lock.
   - `tags` - (Optional) A map of tags to apply to the DNS resolver policy.
+- `opnsense_nva` - (Optional) Overrides for a managed OPNsense NVA. Set `enabled_resources.opnsense_nva = true` to deploy it. The root PTN owns the appliance dispatch, NVA subnet, static router IP, NAT association, and routing integration. Fields:
+  - `name` - (Optional) VM name. Default `opnsense-<hub-key>`.
+  - `subnet.address_prefix` - (Optional) NVA subnet CIDR. Required unless the reserved `hub_virtual_network.subnets["opnsense_nva"].address_prefixes[0]` is configured; the module never invents a CIDR.
+  - `subnet.router_host` - (Optional) Host index used for the static router IP. Default `4`; the same derived address is used by NIC and VirtualAppliance routing.
+  - `compute.vm_size` - (Optional) VM size. Default `Standard_B2ms`.
+  - `compute.zone` - (Optional) Availability zone.
+  - `compute.admin_ssh_public_key` - (Required in managed mode) Operator-owned SSH public key. Private keys are not accepted or generated.
+  - `image.source_image_id` - (Optional) Existing managed image ID with OPNsense pre-installed. When omitted, the module uses the pinned FreeBSD bootstrap path.
+  - `bootstrap.release` - (Optional) OPNsense release. Default `25.1`.
+  - `bootstrap.commit_sha` - (Optional) Pinned `opnsense/update` commit. Default `da1985064501be4e7e7f35c073f21b5b3a17a6f5`.
+  - `tags` - (Optional) Resource tags, falling back to module-level `tags`.
+
+Managed mode rejects explicitly enabled Azure Firewall/Firewall Policy and conflicting router/default-route settings. Hubs that omit OPNsense retain the upstream Firewall default and existing behavior. The current bootstrap path has no deterministic post-boot OPNsense runtime/configuration attestation; `examples/opnsense-010-hub-spoke` is **BLOCKED**, not accepted, until that proof and the full dual-subscription lifecycle pass.
 
 DESCRIPTION
 
@@ -1588,6 +1626,62 @@ DESCRIPTION
       ])
     ])
     error_message = "When route_table_reference_key is 'Firewall', hub_virtual_network.route_table_firewall_enabled must be true."
+  }
+  validation {
+    condition = alltrue([
+      for _, hub in var.hub_virtual_networks : !hub.enabled_resources.opnsense_nva || (
+        coalesce(hub.opnsense_nva.subnet.address_prefix, try(hub.hub_virtual_network.subnets["opnsense_nva"].address_prefixes[0], null), "") != "" &&
+        can(cidrnetmask(coalesce(hub.opnsense_nva.subnet.address_prefix, try(hub.hub_virtual_network.subnets["opnsense_nva"].address_prefixes[0], "")))) &&
+        can(cidrhost(coalesce(hub.opnsense_nva.subnet.address_prefix, try(hub.hub_virtual_network.subnets["opnsense_nva"].address_prefixes[0], "")), hub.opnsense_nva.subnet.router_host)) &&
+        hub.opnsense_nva.subnet.router_host == floor(hub.opnsense_nva.subnet.router_host) &&
+        hub.opnsense_nva.subnet.router_host >= 4 &&
+        cidrhost(coalesce(hub.opnsense_nva.subnet.address_prefix, try(hub.hub_virtual_network.subnets["opnsense_nva"].address_prefixes[0], "")), hub.opnsense_nva.subnet.router_host) != cidrhost(coalesce(hub.opnsense_nva.subnet.address_prefix, try(hub.hub_virtual_network.subnets["opnsense_nva"].address_prefixes[0], "")), -1)
+      )
+    ])
+    error_message = "Managed OPNsense requires a resolvable IPv4 subnet prefix and a deterministic router_host that is an integer, at least 4, and not the subnet's final reserved address. Set opnsense_nva.subnet.address_prefix or configure hub_virtual_network.subnets[\"opnsense_nva\"].address_prefixes."
+  }
+  validation {
+    condition = alltrue([
+      for _, hub in var.hub_virtual_networks : !hub.enabled_resources.opnsense_nva || (
+        try(hub.opnsense_nva.subnet.address_prefix, null) == null ||
+        try(hub.hub_virtual_network.subnets["opnsense_nva"].address_prefixes[0], null) == null ||
+        hub.opnsense_nva.subnet.address_prefix == hub.hub_virtual_network.subnets["opnsense_nva"].address_prefixes[0]
+      )
+    ])
+    error_message = "If both opnsense_nva.subnet.address_prefix and hub_virtual_network.subnets[\"opnsense_nva\"].address_prefixes are set, they must match exactly."
+  }
+  validation {
+    condition = alltrue([
+      for _, hub in var.hub_virtual_networks : !hub.enabled_resources.opnsense_nva || (
+        hub.opnsense_nva.compute.admin_ssh_public_key != null && can(regex(
+          "^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp[0-9]+)[[:space:]]+[A-Za-z0-9+/=]+",
+          trimspace(hub.opnsense_nva.compute.admin_ssh_public_key)
+        ))
+      )
+    ])
+    error_message = "Managed OPNsense requires an OpenSSH public key in opnsense_nva.compute.admin_ssh_public_key. Supply an operator-owned public key; do not provide private key material."
+  }
+  validation {
+    condition = alltrue([
+      for _, hub in var.hub_virtual_networks : !hub.enabled_resources.opnsense_nva || (
+        hub.enabled_resources.firewall != true && hub.enabled_resources.firewall_policy != true &&
+        (try(hub.hub_virtual_network.hub_router_ip_address, null) == null || try(hub.hub_virtual_network.hub_router_ip_address, null) == cidrhost(
+          coalesce(hub.opnsense_nva.subnet.address_prefix, try(hub.hub_virtual_network.subnets["opnsense_nva"].address_prefixes[0], "")),
+          hub.opnsense_nva.subnet.router_host
+        )) &&
+        try(hub.hub_virtual_network.route_table_user_subnets_enabled, true) != false &&
+        alltrue([
+          for route in try(hub.hub_virtual_network.route_table_entries_user_subnets, []) :
+          route.address_prefix != "0.0.0.0/0" || (
+            route.next_hop_type == "VirtualAppliance" && route.next_hop_ip_address == cidrhost(
+              coalesce(hub.opnsense_nva.subnet.address_prefix, try(hub.hub_virtual_network.subnets["opnsense_nva"].address_prefixes[0], "")),
+              hub.opnsense_nva.subnet.router_host
+            )
+          )
+        ])
+      )
+    ])
+    error_message = "Managed OPNsense cannot be combined with explicitly enabled Azure Firewall/Firewall Policy or a conflicting hub router/default route. Omit the hub router address to derive it, and let the root module own default routing."
   }
 }
 

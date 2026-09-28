@@ -1,0 +1,366 @@
+---
+# -----------------------------------------------------------------------------
+# OPNsense Scenario CI Pipeline
+# -----------------------------------------------------------------------------
+#
+# This workflow validates OPNsense examples in addition to the upstream AVM
+# managed workflow. It does NOT replace pr-check.yml.
+#
+# Stages:
+#   1. Source validation (fmt, validate, tflint)
+#   2. Plan validation (no unexpected changes)
+#   3. Deploy + idempotency (apply, second plan = zero diff, destroy)
+#
+# See docs/FORK-STRATEGY.md for the full 6-layer test matrix.
+# -----------------------------------------------------------------------------
+
+name: OPNsense CI
+
+on:
+  pull_request:
+    types: ['opened', 'reopened', 'synchronize']
+    paths:
+      - 'modules/opnsense-nva/**'
+      - 'examples/opnsense-*/**'
+      - 'tests/opnsense-*/**'
+      - '.github/workflows/opnsense-ci.yml'
+      # Root module changes that affect OPNsense dispatch
+      - 'main.opnsense.tf'
+      - 'locals.opnsense.tf'
+  push:
+    branches:
+      - main
+    paths:
+      - 'modules/opnsense-nva/**'
+      - 'examples/opnsense-*/**'
+      - 'tests/opnsense-*/**'
+      - 'main.opnsense.tf'
+      - 'locals.opnsense.tf'
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Run deploy tests (requires Azure credentials)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  TERRAFORM_VERSION: '1.12.0'
+  TFLINT_VERSION: 'v0.54.0'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # L1: Source Validation
+  # ---------------------------------------------------------------------------
+  source-validation:
+    name: L1 Source Validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive modules/opnsense-nva examples/opnsense-* tests/opnsense-*
+
+      # NOTE: Full AVM static + generated-file drift validation requires
+      # `avm pr-check` (PowerShell, Avm.Authoring module). That gate runs in
+      # pr-check.yml via the upstream managed workflow for non-fork PRs.
+      # The steps below are a lightweight pre-flight — they do NOT replace
+      # `avm pr-check`; they catch obvious issues fast on every push.
+
+      - name: Terraform Validate - Module
+        working-directory: modules/opnsense-nva
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Terraform Validate - Examples
+        run: |
+          for dir in examples/opnsense-* tests/opnsense-*; do
+            if [ -d "$dir" ]; then
+              echo "Validating $dir"
+              cd "$dir"
+              terraform init -backend=false
+              terraform validate
+              cd - > /dev/null
+            fi
+          done
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: TFLint - Module
+        working-directory: modules/opnsense-nva
+        run: |
+          tflint --init
+          tflint --format compact
+
+      - name: TFLint - Examples and Tests
+        run: |
+          for dir in examples/opnsense-* tests/opnsense-*; do
+            if [ -d "$dir" ]; then
+              echo "Linting $dir"
+              cd "$dir"
+              tflint --init
+              tflint --format compact
+              cd - > /dev/null
+            fi
+          done
+
+  # ---------------------------------------------------------------------------
+  # L2: Plan Validation (requires Azure credentials)
+  # ---------------------------------------------------------------------------
+  plan-validation:
+    name: L2 Plan Validation
+    runs-on: ubuntu-latest
+    needs: source-validation
+    # Run on non-fork PRs, AND on push/workflow_dispatch (which have no
+    # pull_request context — the old condition silently skipped them).
+    if: >
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.fork == false
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Plan - opnsense-nva-primitive
+        working-directory: tests/opnsense-nva-primitive
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: true
+        run: |
+          terraform init -backend=false
+          terraform plan -out=tfplan -var="enable_telemetry=false"
+
+          # Verify plan has no unexpected replacements
+          terraform show -json tfplan > plan.json
+          REPLACEMENTS=$(jq '[.resource_changes[]? | select(.change.actions | contains(["delete"]))] | length' plan.json)
+          if [ "$REPLACEMENTS" -gt 0 ]; then
+            echo "::error::Plan contains unexpected resource replacements"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # L3 + L6: Deploy and Idempotency (manual trigger or main branch)
+  # ---------------------------------------------------------------------------
+  deploy-validation:
+    name: L3+L6 Deploy and Idempotency
+    runs-on: ubuntu-latest
+    needs: plan-validation
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    permissions:
+      id-token: write
+      contents: read
+    environment: integration-test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy - opnsense-nva-primitive (appliance bootstrap test)
+        working-directory: tests/opnsense-nva-primitive
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: true
+        run: |
+          terraform init -backend=false
+          terraform apply -auto-approve -var="enable_telemetry=false"
+
+      # -------------------------------------------------------------------------
+      # L3 Smoke Assertions
+      # These prove actual guest state, not just Azure resource provisioning.
+      # -------------------------------------------------------------------------
+      - name: L3 Smoke - Bootstrap Stage 1 (Schedule) Succeeded
+        working-directory: tests/opnsense-nva-primitive
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: true
+        run: |
+          EXT_ID=$(terraform output -raw bootstrap_extension_id)
+          RG=$(terraform output -raw resource_group_name)
+          VM_NAME=$(basename "$(dirname "$EXT_ID")")
+
+          PROV_STATE=$(az vm extension show \
+            --resource-group "$RG" \
+            --vm-name "$VM_NAME" \
+            --name "opnsense-bootstrap" \
+            --query "provisioningState" -o tsv)
+
+          echo "Bootstrap CSE stage-1 provisioningState: $PROV_STATE"
+          # Stage 1 succeeds = schedule was written; does NOT mean OPNsense
+          # is installed. OPNsense install happens post-reboot (stage 2).
+          if [ "$PROV_STATE" != "Succeeded" ]; then
+            echo "::error::Bootstrap CSE stage 1 failed — provisioningState=$PROV_STATE"
+            az vm extension show \
+              --resource-group "$RG" \
+              --vm-name "$VM_NAME" \
+              --name "opnsense-bootstrap" \
+              --query "instanceView" -o json || true
+            exit 1
+          fi
+          echo "✅ Bootstrap CSE stage 1 succeeded (schedule written)"
+          echo "NOTE: OPNsense installation completes post-reboot. Tuple is"
+          echo "      candidate until integration run confirms version output."
+
+      - name: L3 Smoke - NIC IP Forwarding Enabled
+        working-directory: tests/opnsense-nva-primitive
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: true
+        run: |
+          NIC_ID=$(terraform output -raw opnsense_nic_id)
+          RG=$(terraform output -raw resource_group_name)
+          NIC_NAME=$(basename "$NIC_ID")
+
+          IP_FWD=$(az network nic show \
+            --resource-group "$RG" \
+            --name "$NIC_NAME" \
+            --query "enableIpForwarding" -o tsv)
+
+          echo "NIC enableIpForwarding: $IP_FWD"
+          if [ "$IP_FWD" != "true" ]; then
+            echo "::error::NIC IP forwarding is not enabled"
+            exit 1
+          fi
+          echo "✅ NIC IP forwarding confirmed"
+
+      - name: L4 Smoke - Effective Routes Next-Hop via NVA
+        working-directory: tests/opnsense-nva-primitive
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: true
+        run: |
+          TEST_NIC_ID=$(terraform output -raw test_nic_id)
+          RG=$(terraform output -raw resource_group_name)
+          TEST_NIC_NAME=$(basename "$TEST_NIC_ID")
+          EXPECTED_HOP=$(terraform output -raw expected_next_hop_ip)
+
+          echo "Querying effective routes for NIC: $TEST_NIC_NAME"
+          EFFECTIVE=$(az network nic show-effective-route-table \
+            --resource-group "$RG" \
+            --name "$TEST_NIC_NAME" \
+            --output json)
+
+          # The default route (0.0.0.0/0) must point to the NVA IP
+          ACTUAL_HOP=$(echo "$EFFECTIVE" | jq -r '
+            .value[]
+            | select(.addressPrefix[]? == "0.0.0.0/0")
+            | select(.source == "User")
+            | .nextHopIpAddress // empty
+          ' | head -1)
+
+          echo "Expected next-hop: $EXPECTED_HOP"
+          echo "Actual   next-hop: $ACTUAL_HOP"
+
+          if [ "$ACTUAL_HOP" != "$EXPECTED_HOP" ]; then
+            echo "::error::Effective route next-hop mismatch: expected $EXPECTED_HOP, got $ACTUAL_HOP"
+            echo "$EFFECTIVE" | jq '.value[] | {prefix: .addressPrefix, source: .source, hop: .nextHopIpAddress}' || true
+            exit 1
+          fi
+          echo "✅ Effective route next-hop confirmed: $ACTUAL_HOP"
+
+      - name: Idempotency Check
+        working-directory: tests/opnsense-nva-primitive
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: true
+        run: |
+          # Second plan must show zero changes
+          terraform plan -detailed-exitcode -var="enable_telemetry=false" || {
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 2 ]; then
+              echo "::error::Idempotency check failed - second plan shows changes"
+              exit 1
+            elif [ $EXIT_CODE -ne 0 ]; then
+              echo "::error::Plan failed with exit code $EXIT_CODE"
+              exit $EXIT_CODE
+            fi
+          }
+          echo "✅ Idempotency check passed - no changes detected"
+
+      - name: Destroy
+        if: always()
+        working-directory: tests/opnsense-nva-primitive
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: true
+        run: |
+          terraform destroy -auto-approve -var="enable_telemetry=false"
+
+  # ---------------------------------------------------------------------------
+  # Summary
+  # ---------------------------------------------------------------------------
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [source-validation, plan-validation, deploy-validation]
+    if: always()
+    permissions:
+      contents: read
+
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "## OPNsense CI Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| L1 Source Validation | ${{ needs.source-validation.result == 'success' && '✅' || needs.source-validation.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| L2 Plan Validation | ${{ needs.plan-validation.result == 'success' && '✅' || needs.plan-validation.result == 'skipped' && '⏭️ (fork)' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| L3+L4+L6 Deploy/Assertions | ${{ needs.deploy-validation.result == 'success' && '✅' || needs.deploy-validation.result == 'skipped' && '⏭️ (manual/main only)' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See [FORK-STRATEGY.md](../docs/FORK-STRATEGY.md) for full test matrix." >> $GITHUB_STEP_SUMMARY

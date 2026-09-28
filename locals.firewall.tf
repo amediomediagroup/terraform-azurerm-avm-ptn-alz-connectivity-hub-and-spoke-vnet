@@ -8,7 +8,9 @@ locals {
       })
     })
   }
-  firewall_enabled = { for key, value in var.hub_virtual_networks : key => value.enabled_resources.firewall }
+  firewall_enabled = {
+    for key, value in var.hub_virtual_networks : key => value.enabled_resources.opnsense_nva ? false : coalesce(value.enabled_resources.firewall, true)
+  }
   firewall_ip_configurations = {
     for key, value in var.hub_virtual_networks : key => merge(value.firewall.ip_configurations, {
       for ip_config_key, ip_config_value in value.firewall.ip_configurations : ip_config_key => merge(ip_config_value, {
