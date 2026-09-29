@@ -356,7 +356,7 @@ resource "azapi_resource" "bootstrap_ext" {
       type                    = "CustomScriptForLinux"
       typeHandlerVersion      = "1.5"
       autoUpgradeMinorVersion = true
-      settings = jsonencode({
+      settings = {
         fileUris = [
           "${local.stage1_script_url}"
         ]
@@ -367,7 +367,7 @@ resource "azapi_resource" "bootstrap_ext" {
           "'${local.opnsense_private_ip}'",
           "'${local.bootstrap_generation}'"
         ])
-      })
+      }
     }
   }
 

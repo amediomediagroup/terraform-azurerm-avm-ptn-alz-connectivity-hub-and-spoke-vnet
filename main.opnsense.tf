@@ -110,12 +110,12 @@ resource "azapi_resource" "opnsense_bootstrap_ext" {
       type                    = "CustomScriptForLinux"
       typeHandlerVersion      = "1.5"
       autoUpgradeMinorVersion = true
-      settings = jsonencode({
+      settings = {
         fileUris = [
           "${local.opnsense_stage1_script_base_url}/aegis-opnsense-stage1.sh"
         ]
         commandToExecute = local.opnsense_stage1_commands[each.key]
-      })
+      }
     }
   }
 
