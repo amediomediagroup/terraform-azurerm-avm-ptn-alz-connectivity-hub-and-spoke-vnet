@@ -95,7 +95,9 @@ locals {
   # OPNsense CE 26.7 gallery image — built by image factory (opnsense-ce-image-provenance.json)
   # Hyper-V Gen 1, Generalized, WALinuxAgent 2.15.0.1 pre-installed.
   # Pin to exact version — do NOT use "latest" for NVA images.
-  opnsense_source_image_id = "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/galleries/aegisOPNsenseGallery/images/opnsense-ce/versions/1.0.0"
+  # 1.0.1 — fixes waagent OS.SshDir path (/etc/ssh → /usr/local/etc/ssh)
+  #          resolves OSProvisioningInternalError on first deploy from Generalized image
+  opnsense_source_image_id = "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/galleries/aegisOPNsenseGallery/images/opnsense-ce/versions/1.0.1"
 }
 
 # -----------------------------------------------------------------------------

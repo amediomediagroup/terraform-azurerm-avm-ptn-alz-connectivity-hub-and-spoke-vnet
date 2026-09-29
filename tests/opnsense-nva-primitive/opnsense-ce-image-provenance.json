@@ -30,7 +30,9 @@
     "13. waagent -deprovision+user -force",
     "14. az vm deallocate + az vm generalize",
     "15. az image create --hyper-v-generation V1 (managed image)",
-    "16. az sig image-version create -> gallery version 1.0.0"
+    "16. az sig image-version create -> gallery version 1.0.0",
+    "17. Fix waagent.conf: OS.SshDir=/etc/ssh \u2192 /usr/local/etc/ssh (pkg install writes Linux default; FreeBSD path is /usr/local/etc/ssh)",
+    "18. Re-deprovision, re-capture \u2192 opnsense-26-7-ce-v2 \u2192 gallery version 1.0.1"
   ],
   "azure_resources": {
     "subscription_id": "e93e97f4-923a-4807-93fb-00499800f572",
@@ -38,8 +40,8 @@
     "location": "eastasia",
     "compute_gallery": "aegisOPNsenseGallery",
     "image_definition": "opnsense-ce",
-    "gallery_image_version_id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/galleries/aegisOPNsenseGallery/images/opnsense-ce/versions/1.0.0",
-    "managed_image_id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/images/opnsense-26-7-ce-managed"
+    "gallery_image_version_id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/galleries/aegisOPNsenseGallery/images/opnsense-ce/versions/1.0.1",
+    "managed_image_id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/images/opnsense-26-7-ce-v2"
   },
   "attestation": {
     "opnsense_version": "26.7",
@@ -48,6 +50,10 @@
     "pf_status": "Enabled",
     "hyper_v_nic": "hn0",
     "pkg_count": 169,
-    "walinuxagent_version": "WALinuxAgent-2.15.0.1"
+    "walinuxagent_version": "WALinuxAgent-2.15.0.1",
+    "gallery_image_version": "1.0.1",
+    "waagent_os_ssh_dir": "/usr/local/etc/ssh",
+    "provisioning_state": "Succeeded",
+    "effective_route_0_0_0_0": "10.0.1.4"
   }
 }
