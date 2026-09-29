@@ -16,8 +16,14 @@ crash.*.log
 *.tfvars
 *.tfvars.json
 
-# Ignore override files as they are usually used to override resources locally and so
-# are not checked in
+# Aegis local working files — not part of public module
+repomix-*.txt
+repomix-opnsense-aegis.txt
+AEGIS_OPNSENSE_CONNECTIVITY_LZ_KNOWLEDGE_BASE.md
+.kiro/
+examples/opnsense-010-hub-spoke/attestation/
+examples/opnsense-010-hub-spoke/010.tfvars
+
 override.tf
 override.tf.json
 *_override.tf

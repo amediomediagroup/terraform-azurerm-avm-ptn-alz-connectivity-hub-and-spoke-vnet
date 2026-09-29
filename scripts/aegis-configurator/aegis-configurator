@@ -1,0 +1,38 @@
+#!/bin/sh
+#
+# AEGIS OPNsense First-Boot Configurator rc.d service
+#
+# Placement: /usr/local/etc/rc.d/aegis_configurator
+# Runs after OPNsense initialization is complete (REQUIRE: opnsense_init)
+# 
+# PROVIDE: aegis_configurator
+# REQUIRE: NETWORKING opnsense
+# BEFORE:  DAEMON
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="aegis_configurator"
+rcvar="${name}_enable"
+start_cmd="${name}_start"
+stop_cmd=":"
+
+LOGFILE="/var/log/aegis-configurator.log"
+SCRIPT="/usr/local/libexec/aegis/aegis-first-boot.py"
+
+aegis_configurator_start()
+{
+    echo "Starting AEGIS configurator..."
+    /usr/local/bin/python3 "${SCRIPT}" >> "${LOGFILE}" 2>&1
+    local rc=$?
+    if [ $rc -ne 0 ]; then
+        echo "AEGIS configurator FAILED (exit ${rc}) — check ${LOGFILE}" >&2
+    else
+        echo "AEGIS configurator complete"
+    fi
+    return $rc
+}
+
+load_rc_config $name
+: ${aegis_configurator_enable:="NO"}
+run_rc_command "$1"

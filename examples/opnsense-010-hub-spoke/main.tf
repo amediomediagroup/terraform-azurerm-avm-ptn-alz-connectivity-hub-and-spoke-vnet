@@ -193,6 +193,10 @@ locals {
 
       hub_virtual_network = {
         address_space = [local.hub_prefix]
+        # routing_address_space declares spoke CIDRs — used for hub UDR mesh
+        # AND derived by root into AEGIS configurator customData for OPNsense policy.
+        # Consumer declares only intent; root owns all transport semantics.
+        routing_address_space = [local.spoke_cidr]
       }
 
       opnsense_nva = {
@@ -201,6 +205,12 @@ locals {
         }
         compute = {
           admin_ssh_public_key = var.admin_ssh_public_key
+          vm_size              = "Standard_B2ats_v2"
+        }
+        image = {
+          # Gallery 1.0.2: OPNsense CE 26.7 + AEGIS first-boot configurator
+          # (waagent OS.SshDir fix + per-deployment policy injection via customData)
+          source_image_id = "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-connectivity-imagebuilder-eas-rg-001/providers/Microsoft.Compute/galleries/gal_connectivity_prod_opnsense/images/opnsense-ce/versions/1.0.2"
         }
       }
     }
@@ -383,7 +393,7 @@ resource "azapi_resource" "spoke_test_vm" {
   body = {
     properties = {
       hardwareProfile = {
-        vmSize = "Standard_B1s"
+        vmSize = "Standard_B2ats_v2"
       }
       osProfile = {
         computerName  = "spoke-test"

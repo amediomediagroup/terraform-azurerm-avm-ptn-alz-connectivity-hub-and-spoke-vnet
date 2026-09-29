@@ -79,9 +79,12 @@ module "opnsense_nva" {
 
   enable_ip_forwarding          = true
   enable_accelerated_networking = false
-  custom_data                   = null
-  enable_telemetry              = var.enable_telemetry
-  tags                          = coalesce(each.value.opnsense_nva.tags, var.tags, {})
+  # Internally-generated AEGIS first-boot configurator payload.
+  # Derived from routing_address_space, router_ip, and image identity.
+  # Consumer does not construct or see this value.
+  custom_data      = try(local.opnsense_runtime_payloads[each.key], null)
+  enable_telemetry = var.enable_telemetry
+  tags             = coalesce(each.value.opnsense_nva.tags, var.tags, {})
 
   retry    = var.retry
   timeouts = var.timeouts
