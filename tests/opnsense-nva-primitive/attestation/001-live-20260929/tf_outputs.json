@@ -1,0 +1,77 @@
+{
+  "expected_next_hop_ip": {
+    "sensitive": false,
+    "type": "string",
+    "value": "10.0.1.4"
+  },
+  "natgw_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/natGateways/natgw-nva-08fp"
+  },
+  "opnsense_image_version": {
+    "sensitive": false,
+    "type": "string",
+    "value": "26.7"
+  },
+  "opnsense_nic_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/networkInterfaces/nic-opnsense-nva-08fp"
+  },
+  "opnsense_private_ip": {
+    "sensitive": false,
+    "type": "string",
+    "value": "10.0.1.4"
+  },
+  "opnsense_source_image_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/galleries/aegisOPNsenseGallery/images/opnsense-ce/versions/1.0.1"
+  },
+  "opnsense_vm_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Compute/virtualMachines/opnsense-nva-08fp"
+  },
+  "opnsense_vm_name": {
+    "sensitive": false,
+    "type": "string",
+    "value": "opnsense-nva-08fp"
+  },
+  "resource_group_name": {
+    "sensitive": false,
+    "type": "string",
+    "value": "rg-opnsense-001-08fp"
+  },
+  "route_table_test_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/routeTables/rt-test-via-nva-08fp"
+  },
+  "subnet_nva_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/virtualNetworks/vnet-opnsense-001-08fp/subnets/snet-nva"
+  },
+  "subnet_test_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/virtualNetworks/vnet-opnsense-001-08fp/subnets/snet-test"
+  },
+  "test_nic_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/networkInterfaces/nic-test-08fp"
+  },
+  "test_vm_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Compute/virtualMachines/vm-test-08fp"
+  },
+  "vnet_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/virtualNetworks/vnet-opnsense-001-08fp"
+  }
+}

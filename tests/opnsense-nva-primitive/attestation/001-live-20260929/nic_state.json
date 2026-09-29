@@ -1,0 +1,54 @@
+{
+  "auxiliaryMode": "None",
+  "auxiliarySku": "None",
+  "disableTcpStateTracking": false,
+  "dnsSettings": {
+    "appliedDnsServers": [],
+    "dnsServers": [],
+    "internalDomainNameSuffix": "gajzu1uzdcgevgc3g4p2kktfsf.hx.internal.cloudapp.net"
+  },
+  "enableAcceleratedNetworking": false,
+  "enableIPForwarding": true,
+  "etag": "W/\"c6cc4521-be3b-4f18-894e-413142a63b84\"",
+  "hostedWorkloads": [],
+  "id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/networkInterfaces/nic-opnsense-nva-08fp",
+  "ipConfigurations": [
+    {
+      "etag": "W/\"c6cc4521-be3b-4f18-894e-413142a63b84\"",
+      "id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/networkInterfaces/nic-opnsense-nva-08fp/ipConfigurations/ipconfig1",
+      "name": "ipconfig1",
+      "primary": true,
+      "privateIPAddress": "10.0.1.4",
+      "privateIPAddressVersion": "IPv4",
+      "privateIPAllocationMethod": "Static",
+      "provisioningState": "Succeeded",
+      "resourceGroup": "rg-opnsense-001-08fp",
+      "subnet": {
+        "id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/virtualNetworks/vnet-opnsense-001-08fp/subnets/snet-nva",
+        "resourceGroup": "rg-opnsense-001-08fp"
+      },
+      "type": "Microsoft.Network/networkInterfaces/ipConfigurations"
+    }
+  ],
+  "location": "eastasia",
+  "macAddress": "60-45-BD-56-70-79",
+  "name": "nic-opnsense-nva-08fp",
+  "nicType": "Standard",
+  "primary": true,
+  "provisioningState": "Succeeded",
+  "resourceGroup": "rg-opnsense-001-08fp",
+  "resourceGuid": "403fda88-8ff3-441c-b0e8-45c19ffbbfde",
+  "tags": {
+    "created_by": "terraform",
+    "environment": "demo",
+    "owner": "avm",
+    "project": "opnsense-001-single-nva"
+  },
+  "tapConfigurations": [],
+  "type": "Microsoft.Network/networkInterfaces",
+  "virtualMachine": {
+    "id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Compute/virtualMachines/opnsense-nva-08fp",
+    "resourceGroup": "rg-opnsense-001-08fp"
+  },
+  "vnetEncryptionSupported": false
+}

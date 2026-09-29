@@ -1,0 +1,85 @@
+{
+  "diagnosticsProfile": {
+    "bootDiagnostics": {
+      "enabled": true
+    }
+  },
+  "etag": "\"3\"",
+  "fqdns": "",
+  "hardwareProfile": {
+    "vmSize": "Standard_B2ats_v2"
+  },
+  "id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Compute/virtualMachines/opnsense-nva-08fp",
+  "location": "eastasia",
+  "macAddresses": "60-45-BD-56-70-79",
+  "name": "opnsense-nva-08fp",
+  "networkProfile": {
+    "networkInterfaces": [
+      {
+        "id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Network/networkInterfaces/nic-opnsense-nva-08fp",
+        "primary": true,
+        "resourceGroup": "rg-opnsense-001-08fp"
+      }
+    ]
+  },
+  "osProfile": {
+    "adminUsername": "azureadmin",
+    "allowExtensionOperations": true,
+    "computerName": "opnsense-nva-08fp",
+    "linuxConfiguration": {
+      "disablePasswordAuthentication": true,
+      "enableVMAgentPlatformUpdates": true,
+      "patchSettings": {
+        "assessmentMode": "ImageDefault",
+        "patchMode": "ImageDefault"
+      },
+      "provisionVMAgent": true,
+      "ssh": {
+        "publicKeys": [
+          {
+            "keyData": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCmdX6opmjzSVNcFUKQfsGmWPRW9PIIJLWu9vIExmRufD8b4k6FZJWsBDdgsxNfnzE52eS19Cax7AQ9wiUgvSh1UhffUcLG1WIU4P3uH83PZR2YvVYcXXKsESeDe6VnP5suRRoB1vswllLeyAuOqNgY0ln4go57TUlreSv1vLkVN224dLpfsss/VKJmtaZDSn7sFSawDv38z//G6/BfMkOUzjfZVFSQrs4qYPvse/mGvXxbYutlZAVwoW3je7Sghgdt6wBYhlwIte5FLM/VzXIWMyQBQK2rhZHRIZScYnJw4qleRHgKgZSUYqN2kQwhHkopXMMgWuaF6mUwjXbFIc+QsRX8xBOiuFN5W3A/vSTrQTS0tqXc/16x7r2zmOLTUFJZOxCcUyV6UVQDpCcRtvC6i9vd4UNlMytgUlrl9MY2yo/HB4YDhlXou019zL3h0L4IVwXZVWEl4Kh7jhNlZSEB0g1lTNwNIZrhjTQ0WxAT8gW3aUnXfLZ0JXzGJzB0WhBrvRb9jeumQOAQudDJsnR8BOvh93dxMaxVjvu21r0pOabRl6llXEN9l/b2UKOyd3AIzyzkJK7rd4+1kV5CWvrjMN7HzKuHa/558gw0/TbAAo5ZMc6HmXJngQgM3D7lL1s2f+pi54IqePuree6Z0oFQY+h0IpRXU/YfEFd66VVI+w==\n",
+            "path": "/home/azureadmin/.ssh/authorized_keys"
+          }
+        ]
+      }
+    },
+    "requireGuestProvisionSignal": true,
+    "secrets": []
+  },
+  "powerState": "VM running",
+  "privateIps": "10.0.1.4",
+  "provisioningState": "Succeeded",
+  "publicIps": "",
+  "resourceGroup": "rg-opnsense-001-08fp",
+  "storageProfile": {
+    "dataDisks": [],
+    "imageReference": {
+      "exactVersion": "1.0.1",
+      "id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/galleries/aegisOPNsenseGallery/images/opnsense-ce/versions/1.0.1",
+      "resourceGroup": "rg-opnsense-image-factory"
+    },
+    "osDisk": {
+      "caching": "ReadWrite",
+      "createOption": "FromImage",
+      "deleteOption": "Detach",
+      "diskSizeGB": 30,
+      "managedDisk": {
+        "id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-001-08fp/providers/Microsoft.Compute/disks/opnsense-nva-08fp_OsDisk_1_bb7c27f3dcbf4fbd9ec43035f13880b2",
+        "resourceGroup": "rg-opnsense-001-08fp",
+        "storageAccountType": "Premium_LRS"
+      },
+      "name": "opnsense-nva-08fp_OsDisk_1_bb7c27f3dcbf4fbd9ec43035f13880b2",
+      "osType": "Linux",
+      "writeAcceleratorEnabled": false
+    }
+  },
+  "tags": {
+    "created_by": "terraform",
+    "environment": "demo",
+    "owner": "avm",
+    "project": "opnsense-001-single-nva"
+  },
+  "timeCreated": "2026-09-29T09:36:19.8136265+00:00",
+  "type": "Microsoft.Compute/virtualMachines",
+  "vmId": "ae98f5c0-1f07-4724-9825-1dad22edc390"
+}

@@ -1,0 +1,37 @@
+{
+  "value": [
+    {
+      "addressPrefix": [
+        "10.0.0.0/16"
+      ],
+      "disableBgpRoutePropagation": true,
+      "nextHopIpAddress": [],
+      "nextHopType": "VnetLocal",
+      "source": "Default",
+      "state": "Active"
+    },
+    {
+      "addressPrefix": [
+        "0.0.0.0/0"
+      ],
+      "disableBgpRoutePropagation": true,
+      "nextHopIpAddress": [],
+      "nextHopType": "Internet",
+      "source": "Default",
+      "state": "Invalid"
+    },
+    {
+      "addressPrefix": [
+        "0.0.0.0/0"
+      ],
+      "disableBgpRoutePropagation": true,
+      "name": "default-via-nva",
+      "nextHopIpAddress": [
+        "10.0.1.4"
+      ],
+      "nextHopType": "VirtualAppliance",
+      "source": "User",
+      "state": "Active"
+    }
+  ]
+}
