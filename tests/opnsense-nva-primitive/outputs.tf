@@ -1,3 +1,4 @@
+
 # -----------------------------------------------------------------------------
 # OPNsense NVA
 # -----------------------------------------------------------------------------
@@ -17,9 +18,9 @@ output "opnsense_private_ip" {
   description = "The private IP address of the OPNsense NVA. Used as next-hop in route tables."
 }
 
-output "bootstrap_extension_id" {
-  value       = azapi_resource.bootstrap_ext.id
-  description = "The resource ID of the Custom Script Extension used to bootstrap OPNsense."
+output "opnsense_source_image_id" {
+  value       = local.opnsense_source_image_id
+  description = "The gallery image version ID used to deploy OPNsense. Matches opnsense-ce-image-provenance.json."
 }
 
 # -----------------------------------------------------------------------------
@@ -58,7 +59,7 @@ output "natgw_id" {
 
 # -----------------------------------------------------------------------------
 # Smoke assertion inputs
-# Used by CI to assert effective routes and bootstrap state.
+# Used by CI to assert effective routes and NVA readiness.
 # -----------------------------------------------------------------------------
 
 output "test_nic_id" {
@@ -76,19 +77,12 @@ output "expected_next_hop_ip" {
   description = "The expected next-hop IP in effective routes for snet-test NICs."
 }
 
-
 output "opnsense_vm_name" {
   value       = module.opnsense.name
   description = "The name of the OPNsense VM. Used by CI to query Boot Diagnostics."
 }
 
-output "opnsense_bootstrap_release" {
-  value       = "25.1"
-  description = "The OPNsense release expected in the AEGIS_OPNSENSE_READY attestation."
-}
-
-
-output "expected_generation" {
-  value       = local.bootstrap_generation
-  description = "Expected generation ID in AEGIS_OPNSENSE_READY attestation. CI must assert attestation.generation == this value to reject stale Boot Diagnostics records."
+output "opnsense_image_version" {
+  value       = "26.7"
+  description = "OPNsense CE version deployed via gallery image."
 }

@@ -1,0 +1,53 @@
+{
+  "schema_version": "1",
+  "built_at": "2026-09-29T00:00:00Z",
+  "image": {
+    "product": "OPNsense CE",
+    "version": "26.7",
+    "freebsd_version": "15.1-RELEASE-p1",
+    "architecture": "amd64",
+    "hyper_v_generation": "V1",
+    "azure_os_state": "Generalized"
+  },
+  "source_artifact": {
+    "url": "https://mirror.ams1.nl.leaseweb.net/opnsense/releases/26.7/OPNsense-26.7-nano-amd64.img.bz2",
+    "sha256_bz2": "28d5e2f37e40d87468a924e3006ef10e2ddc6de485b85333d9e3958c84d0cb9d",
+    "checksum_url": "https://mirror.ams1.nl.leaseweb.net/opnsense/releases/26.7/OPNsense-26.7-checksums-amd64.sha256"
+  },
+  "build_steps": [
+    "1. Download OPNsense-26.7-nano-amd64.img.bz2 from official mirror",
+    "2. Verify SHA256 against checksums file",
+    "3. bunzip2 to OPNsense-26.7-nano-amd64.img",
+    "4. qemu-img convert -f raw -O vpc -o subformat=fixed,force_size -> .vhd",
+    "5. Patch VHD footer CHS geometry per Microsoft VHD spec (C=6241 H=16 S=63)",
+    "6. Update VHD footer checksum",
+    "7. az storage blob upload (PageBlob) to aegisopnsensevhd0929/vhds",
+    "8. az disk create --hyper-v-generation V1 --os-type Linux --source blob",
+    "9. Inject config.xml: enable SSH, permit root login, authorized key, WAN/DHCP",
+    "10. Boot VM, verify: opnsense-version 26.7, FreeBSD 15.1-RELEASE-p1, hn0/Hyper-V NIC, net.inet.ip.forwarding=1, pfctl enabled",
+    "11. pkg install azure-agent (WALinuxAgent 2.15.0.1)",
+    "12. sysrc waagent_enable=YES",
+    "13. waagent -deprovision+user -force",
+    "14. az vm deallocate + az vm generalize",
+    "15. az image create --hyper-v-generation V1 (managed image)",
+    "16. az sig image-version create -> gallery version 1.0.0"
+  ],
+  "azure_resources": {
+    "subscription_id": "e93e97f4-923a-4807-93fb-00499800f572",
+    "resource_group": "rg-opnsense-image-factory",
+    "location": "eastasia",
+    "compute_gallery": "aegisOPNsenseGallery",
+    "image_definition": "opnsense-ce",
+    "gallery_image_version_id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/galleries/aegisOPNsenseGallery/images/opnsense-ce/versions/1.0.0",
+    "managed_image_id": "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/images/opnsense-26-7-ce-managed"
+  },
+  "attestation": {
+    "opnsense_version": "26.7",
+    "freebsd_uname": "FreeBSD OPNsense.internal 15.1-RELEASE-p1 FreeBSD 15.1-RELEASE-p1 stable/26.7-n283674-12334a596709 SMP amd64",
+    "net_inet_ip_forwarding": 1,
+    "pf_status": "Enabled",
+    "hyper_v_nic": "hn0",
+    "pkg_count": 169,
+    "walinuxagent_version": "WALinuxAgent-2.15.0.1"
+  }
+}

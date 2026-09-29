@@ -3,20 +3,23 @@
 # -----------------------------------------------------------------------------
 #
 # Proves:
-#   L3 — FreeBSD VM provisions and Custom Script Extension succeeds
+#   L3 — OPNsense CE 26.7 VM provisions from Azure Compute Gallery image
 #   L3 — NIC has IP forwarding enabled
 #   L4 smoke — effective route on snet-test next-hop == OPNsense IP
 #   L6 — second plan == zero diff; destroy succeeds
 #
 # Topology:
 #   VNet 10.0.0.0/16
-#   ├── snet-nva  10.0.1.0/24  ← OPNsense 10.0.1.4   NAT GW for egress, NO UDR
+#   ├── snet-nva  10.0.1.0/24  ← OPNsense 10.0.1.4   NO UDR (NVA own subnet)
 #   └── snet-test 10.0.2.0/24  ← test NIC              UDR 0.0.0.0/0 → 10.0.1.4
 #
-# Bootstrap tuple (candidate — must be confirmed by integration run):
-#   FreeBSD  : thefreebsdfoundation/freebsd-14_2/14_2-release-amd64-gen2-zfs:14.2.20250516
-#   bootstrap: opnsense/update @ da1985064501 (2025-05-07, last stable before FreeBSD 15 work)
-#   OPNsense : 25.1
+# Image: OPNsense CE 26.7 (FreeBSD 15.1-RELEASE-p1, amd64)
+#   Gallery : aegisOPNsenseGallery / opnsense-ce / 1.0.0
+#   RG      : rg-opnsense-image-factory (eastasia, sub e93e97f4)
+#   Provenance: opnsense-ce-image-provenance.json
+#
+# CSE bootstrap retired — gallery image has OPNsense pre-installed + waagent.
+# NAT Gateway retained to allow OPNsense outbound (pkg updates, NTP, etc).
 #
 # See _header.md for full acceptance gates.
 # -----------------------------------------------------------------------------
@@ -89,21 +92,10 @@ locals {
   subnet_test_prefix  = "10.0.2.0/24"
   opnsense_private_ip = "10.0.1.4"
 
-  # Bootstrap tuple — candidate, pending integration run confirmation.
-  # Pinned bootstrap commit: da1985064501 (2025-05-07)
-  bootstrap_commit = "da1985064501be4e7e7f35c073f21b5b3a17a6f5"
-  opnsense_release = "25.1"
-  bootstrap_url    = "https://raw.githubusercontent.com/opnsense/update/${local.bootstrap_commit}/src/bootstrap/opnsense-bootstrap.sh.in"
-
-  # Generation ID — same formula as main.opnsense.tf opnsense_bootstrap_generation local.
-  # Key components: hub_key(="primitive"), release, commit_sha, router_ip.
-  # CI must assert attestation.generation == this value to reject stale records.
-  bootstrap_generation = sha256("primitive:${local.opnsense_release}:${local.bootstrap_commit}:${local.opnsense_private_ip}")
-
-  # Stage-1 script URL — immutable GitHub raw URL at pinned Aegis fork SHA.
-  # CustomScriptForLinux v1.x: fileUris + commandToExecute (not script).
-  aegis_fork_sha    = "d22cc19622b1244b732900613453e4a88f98ecde"
-  stage1_script_url = "https://raw.githubusercontent.com/amediomediagroup/terraform-azurerm-avm-ptn-alz-connectivity-hub-and-spoke-vnet/${local.aegis_fork_sha}/scripts/bootstrap/aegis-opnsense-stage1.sh"
+  # OPNsense CE 26.7 gallery image — built by image factory (opnsense-ce-image-provenance.json)
+  # Hyper-V Gen 1, Generalized, WALinuxAgent 2.15.0.1 pre-installed.
+  # Pin to exact version — do NOT use "latest" for NVA images.
+  opnsense_source_image_id = "/subscriptions/e93e97f4-923a-4807-93fb-00499800f572/resourceGroups/rg-opnsense-image-factory/providers/Microsoft.Compute/galleries/aegisOPNsenseGallery/images/opnsense-ce/versions/1.0.0"
 }
 
 # -----------------------------------------------------------------------------
@@ -302,83 +294,21 @@ module "opnsense" {
 
   enable_ip_forwarding = true
 
-  plan = {
-    name      = "14_2-release-amd64-gen2-zfs"
-    product   = "freebsd-14_2"
-    publisher = "thefreebsdfoundation"
-  }
+  # Gallery image — no Marketplace plan needed for custom/gallery images
+  plan = null
 
   # AN not supported on Standard_B2ats_v2
   enable_accelerated_networking = false
 
-  # Pinned FreeBSD image — do NOT use "latest"
-  source_image_reference = {
-    publisher = "thefreebsdfoundation"
-    offer     = "freebsd-14_2"
-    sku       = "14_2-release-amd64-gen2-zfs"
-    version   = "14.2.0"
-  }
+  # Gallery image: OPNsense CE 26.7 (Generalized, V1, WALinuxAgent pre-installed)
+  # source_image_reference is ignored when source_image_id is set (see virtual-machines.tf).
+  source_image_id = local.opnsense_source_image_id
 
-  # custom_data intentionally null — bootstrap is done via CSE below,
-  # which gives Azure-reported success/failure status we can assert on.
-  custom_data = null
-
+  custom_data      = null
   enable_telemetry = var.enable_telemetry
   tags             = local.tags
 
   depends_on = [azapi_update_resource.subnet_nva_natgw]
-}
-
-# -----------------------------------------------------------------------------
-# Custom Script Extension — OPNsense bootstrap stage 1
-#
-# Publisher: Microsoft.OSTCExtensions.CustomScriptForLinux  (v1.x)
-#   This is the version with documented FreeBSD support.
-#   Microsoft.Azure.Extensions.CustomScript v2.x does NOT list FreeBSD
-#   in its supported OS matrix. Using v1.x until v2.x FreeBSD support is
-#   confirmed by official documentation.
-#
-# Stage 1 only: downloads bootstrap, schedules it as a firstboot rc.d service,
-# then EXITS before the reboot. CSE must not run across the reboot boundary.
-# See locals.bootstrap_stage1_script for full design rationale.
-# -----------------------------------------------------------------------------
-
-resource "azapi_resource" "bootstrap_ext" {
-  type      = "Microsoft.Compute/virtualMachines/extensions@2024-11-01"
-  name      = "opnsense-bootstrap"
-  location  = var.location
-  parent_id = module.opnsense.resource_id
-  tags      = local.tags
-
-  body = {
-    properties = {
-      publisher               = "Microsoft.OSTCExtensions"
-      type                    = "CustomScriptForLinux"
-      typeHandlerVersion      = "1.5"
-      autoUpgradeMinorVersion = true
-      settings = {
-        fileUris = [
-          "${local.stage1_script_url}"
-        ]
-        commandToExecute = join(" ", [
-          "sh aegis-opnsense-stage1.sh",
-          "'${local.opnsense_release}'",
-          "'${local.bootstrap_commit}'",
-          "'${local.opnsense_private_ip}'",
-          "'${local.bootstrap_generation}'"
-        ])
-      }
-    }
-  }
-
-  timeouts {
-    create = "30m"
-    delete = "10m"
-    read   = "5m"
-    update = "30m"
-  }
-
-  depends_on = [module.opnsense]
 }
 
 # -----------------------------------------------------------------------------
