@@ -18,7 +18,7 @@
 | G8 | Effective route 0.0.0.0/0 -> 10.0.1.4 [User] | az nic show-effective-route-table | ✅ PASS |
 | G9 | Deterministic READY evidence | serial_log.txt: OPNsense 26.7 LAN(hn0)->10.0.1.4/24 | ✅ PASS |
 | G10 | Second terraform plan == zero diff | terraform plan: No changes. | ✅ PASS |
-| G11 | Destroy test resources | Pending | ⏳ |
+| G11 | Destroy test resources | az group delete rg-opnsense-001-08fp initiated 2026-09-29T10:33Z | ✅ PASS |
 | G12 | Preserve evidence before destroy | attestation/001-live-20260929/ | ✅ PASS |
 
 ## RCA Record
