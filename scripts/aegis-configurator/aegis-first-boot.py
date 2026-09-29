@@ -131,10 +131,10 @@ def validate_payload(p: dict) -> dict:
     except ValueError:
         fail(f"router_ip '{router_ip}' is not a valid IPv4 address")
 
-    # allowed_spoke_cidrs — list of valid IPv4 networks, at least 1
+    # allowed_spoke_cidrs — list of valid IPv4 networks (may be empty when no spokes yet)
     cidrs_raw = p.get("allowed_spoke_cidrs", [])
-    if not isinstance(cidrs_raw, list) or len(cidrs_raw) == 0:
-        fail("allowed_spoke_cidrs must be a non-empty list")
+    if not isinstance(cidrs_raw, list):
+        fail("allowed_spoke_cidrs must be a list")
 
     validated_cidrs = []
     for cidr in cidrs_raw:
@@ -196,6 +196,9 @@ def configure_firewall(generation: str, cidrs: list) -> bool:
     Add one pass rule per spoke CIDR if not already present.
     Returns True if any new rules were written (reload needed).
     """
+    if not cidrs:
+        log("No spoke CIDRs to configure (empty list — no spokes declared yet)")
+        return False
     ET.register_namespace("", "")
     tree = ET.parse(CONFIG_XML_PATH)
     root = tree.getroot()
@@ -269,6 +272,9 @@ def reload_filter():
 # ---------------------------------------------------------------------------
 
 def verify_pf_rules(cidrs: list):
+    if not cidrs:
+        log("No spoke CIDRs to verify (empty list — no spokes declared yet)")
+        return
     result = subprocess.run(["pfctl", "-sr"], capture_output=True, text=True)
     pf_rules = result.stdout
 
