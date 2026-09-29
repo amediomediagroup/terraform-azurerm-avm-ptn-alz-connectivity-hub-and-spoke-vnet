@@ -10,6 +10,6 @@ DESCRIPTION
 
 variable "location" {
   type        = string
-  default     = "swedencentral"
+  default     = "southeastasia"
   description = "The Azure region for deployment."
 }

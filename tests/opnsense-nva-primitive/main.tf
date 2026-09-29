@@ -99,6 +99,11 @@ locals {
   # Key components: hub_key(="primitive"), release, commit_sha, router_ip.
   # CI must assert attestation.generation == this value to reject stale records.
   bootstrap_generation = sha256("primitive:${local.opnsense_release}:${local.bootstrap_commit}:${local.opnsense_private_ip}")
+
+  # Stage-1 script URL — immutable GitHub raw URL at pinned Aegis fork SHA.
+  # CustomScriptForLinux v1.x: fileUris + commandToExecute (not script).
+  aegis_fork_sha    = "df5704f90d23f15cb303430f271f09dc0c7f36f4"
+  stage1_script_url = "https://raw.githubusercontent.com/amediomediagroup/terraform-azurerm-avm-ptn-alz-connectivity-hub-and-spoke-vnet/${local.aegis_fork_sha}/scripts/bootstrap/aegis-opnsense-stage1.sh"
 }
 
 # -----------------------------------------------------------------------------
@@ -290,14 +295,20 @@ module "opnsense" {
   private_ip_address_allocation = "Static"
   private_ip_address            = local.opnsense_private_ip
 
-  vm_size        = "Standard_B2ms"
+  vm_size        = "Standard_B2ats_v2"
   admin_username = "azureadmin"
 
   admin_ssh_public_key = tls_private_key.ssh.public_key_openssh
 
   enable_ip_forwarding = true
 
-  # AN not supported on Standard_B2ms (requires B12ms+)
+  plan = {
+    name      = "14_2-release-amd64-gen2-zfs"
+    product   = "freebsd-14_2"
+    publisher = "thefreebsdfoundation"
+  }
+
+  # AN not supported on Standard_B2ats_v2
   enable_accelerated_networking = false
 
   # Pinned FreeBSD image — do NOT use "latest"
@@ -305,7 +316,7 @@ module "opnsense" {
     publisher = "thefreebsdfoundation"
     offer     = "freebsd-14_2"
     sku       = "14_2-release-amd64-gen2-zfs"
-    version   = "14.2.20250516"
+    version   = "14.2.0"
   }
 
   # custom_data intentionally null — bootstrap is done via CSE below,
@@ -345,117 +356,18 @@ resource "azapi_resource" "bootstrap_ext" {
       type                    = "CustomScriptForLinux"
       typeHandlerVersion      = "1.5"
       autoUpgradeMinorVersion = true
-      settings = {
-        # Same state machine contract as main.opnsense.tf (root PTN).
-        # Adapted for single-hub locals; generation uses key="primitive".
-        script = base64encode(<<-SCRIPT
-          #!/bin/sh
-          set -e
-          echo "[001] stage1: preparing bootstrap state machine"
-
-          AEGIS_STATE_DIR="/var/db/aegis"
-          mkdir -p "$AEGIS_STATE_DIR"
-
-          GENERATION="${local.bootstrap_generation}"
-          echo "$GENERATION" > "$AEGIS_STATE_DIR/generation"
-          echo "PREPARED" > "$AEGIS_STATE_DIR/state"
-          echo "[001] state=PREPARED generation=$GENERATION"
-
-          for attempt in 1 2 3; do
-            fetch -o /usr/local/sbin/opnsense-bootstrap.sh "${local.bootstrap_url}" && break
-            [ "$attempt" -lt 3 ] || exit 1
-            sleep 15
-          done
-          chmod 700 /usr/local/sbin/opnsense-bootstrap.sh
-
-          cat > /usr/local/etc/rc.d/aegis_opnsense_ready <<RCEOF
-          #!/bin/sh
-          # PROVIDE: aegis_opnsense_ready
-          # REQUIRE: NETWORKING
-          # KEYWORD: nojail
-
-          . /etc/rc.subr
-
-          name="aegis_opnsense_ready"
-          rcvar=\$${name}_enable
-          start_cmd="\$${name}_start"
-
-          aegis_opnsense_ready_start() {
-            local state_dir="/var/db/aegis"
-            local generation=\$$(cat "\$${state_dir}/generation" 2>/dev/null || echo "unknown")
-
-            local attempts=0
-            while [ -f /var/run/booting ] && [ \$${attempts} -lt 30 ]; do
-              sleep 10
-              attempts=\$$(( attempts + 1 ))
-            done
-
-            local actual_release=\$$(opnsense-version -v 2>/dev/null | awk '{print \$$1}')
-            local release_ok="false"
-            [ "\$${actual_release}" = "${local.opnsense_release}" ] && release_ok="true"
-
-            local fwd_val=\$$(sysctl -n net.inet.ip.forwarding 2>/dev/null)
-            local forwarding_ok="false"
-            [ "\$${fwd_val}" = "1" ] && forwarding_ok="true"
-
-            local pf_status=\$$(pfctl -si 2>/dev/null | grep -i "^Status:" | awk '{print \$$2}')
-            local pf_ok="false"
-            [ "\$${pf_status}" = "Enabled" ] && pf_ok="true"
-
-            local ip_ok="false"
-            ifconfig | grep -q "${local.opnsense_private_ip}" && ip_ok="true"
-
-            local bootstrap_pending="false"
-            [ -f /usr/local/etc/rc.d/opnsense_bootstrap ] && bootstrap_pending="true"
-
-            if [ "\$${release_ok}" = "true" ] && [ "\$${forwarding_ok}" = "true" ] && \
-               [ "\$${pf_ok}" = "true" ] && [ "\$${ip_ok}" = "true" ] && \
-               [ "\$${bootstrap_pending}" = "false" ]; then
-              echo "READY" > "\$${state_dir}/state"
-            fi
-
-            printf 'AEGIS_OPNSENSE_READY {"generation":"%s","release":"%s","release_ok":%s,"router_ip":"%s","ip_ok":%s,"forwarding":%s,"pf":%s,"bootstrap_pending":%s}\n' \
-              "\$${generation}" \
-              "\$${actual_release}" "\$${release_ok}" \
-              "${local.opnsense_private_ip}" "\$${ip_ok}" \
-              "\$${forwarding_ok}" "\$${pf_ok}" \
-              "\$${bootstrap_pending}" \
-              > /dev/console
-          }
-
-          load_rc_config \$${name}
-          : \$${aegis_opnsense_ready_enable:=YES}
-          run_rc_command "\$$1"
-          RCEOF
-          chmod 700 /usr/local/etc/rc.d/aegis_opnsense_ready
-
-          cat > /usr/local/etc/rc.d/opnsense_bootstrap <<BSEOF
-          #!/bin/sh
-          # PROVIDE: opnsense_bootstrap
-          # REQUIRE: NETWORKING
-          # KEYWORD: nojail
-
-          state_dir="/var/db/aegis"
-
-          current_state=\$$(cat "\$${state_dir}/state" 2>/dev/null || echo "")
-          if [ "\$${current_state}" != "PREPARED" ]; then
-            echo "[aegis] bootstrap: state=\$${current_state}, skipping"
-            rm -f /usr/local/etc/rc.d/opnsense_bootstrap
-            exit 0
-          fi
-
-          echo "BOOTSTRAPPING" > "\$${state_dir}/state"
-          echo "[aegis] bootstrap: state=BOOTSTRAPPING, starting opnsense-bootstrap"
-
-          /usr/local/sbin/opnsense-bootstrap.sh -r ${local.opnsense_release} -y
-          BSEOF
-          chmod 700 /usr/local/etc/rc.d/opnsense_bootstrap
-
-          echo "[001] stage1 complete"
-          shutdown -r +1 "OPNsense bootstrap scheduled"
-        SCRIPT
-        )
-      }
+      settings = jsonencode({
+        fileUris = [
+          "${local.stage1_script_url}"
+        ]
+        commandToExecute = join(" ", [
+          "sh aegis-opnsense-stage1.sh",
+          "'${local.opnsense_release}'",
+          "'${local.bootstrap_commit}'",
+          "'${local.opnsense_private_ip}'",
+          "'${local.bootstrap_generation}'"
+        ])
+      })
     }
   }
 
@@ -518,7 +430,7 @@ resource "azapi_resource" "vm_test" {
   body = {
     properties = {
       hardwareProfile = {
-        vmSize = "Standard_B1s"
+        vmSize = "Standard_B2ats_v2"
       }
       osProfile = {
         computerName  = "vm-test"

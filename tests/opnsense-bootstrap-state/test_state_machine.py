@@ -39,43 +39,54 @@ def ok(test):
 
 
 def extract_script_body(tf_content: str, heredoc_marker: str) -> str:
-    """Extract the content of a shell heredoc from Terraform HCL."""
-    pattern = rf'<<-?{re.escape(heredoc_marker)}\n(.*?){re.escape(heredoc_marker)}'
-    m = re.search(pattern, tf_content, re.DOTALL)
-    if not m:
-        return ""
-    return m.group(1)
+    """Extract the content of a shell heredoc from Terraform HCL or shell script."""
+    # Handle both <<MARKER and << MARKER (with space)
+    for pattern_str in [
+        rf'<<-?{re.escape(heredoc_marker)}\n(.*?){re.escape(heredoc_marker)}',
+        rf'<<\s+{re.escape(heredoc_marker)}\n(.*?)\n{re.escape(heredoc_marker)}'
+    ]:
+        m = re.search(pattern_str, tf_content, re.DOTALL)
+        if m:
+            return m.group(1)
+    return ""
 
 
 def strip_terraform_interpolations(script: str) -> str:
     """Replace ${...} Terraform interpolations with safe shell literals.
     Handles nested parentheses inside interpolations (e.g. sha256(...)).
+    Only replaces Terraform-style interpolations (local., each., var., sha256(), etc.)
+    not shell variable references like ${state_dir}.
     """
     result = []
     i = 0
     while i < len(script):
         if script[i] == '$' and i + 1 < len(script) and script[i+1] == '{':
-            # Check if this is a double-escaped shell var \$${
-            # (already pre-processed by caller)
+            # Peek at content to determine if this is a TF interpolation
             depth = 0
             j = i + 1
+            content_start = j + 1
             while j < len(script):
-                if script[j] == '{':
-                    depth += 1
+                if script[j] == '{': depth += 1
                 elif script[j] == '}':
                     depth -= 1
                     if depth == 0:
                         j += 1
                         break
                 j += 1
-            result.append('"__TF_PLACEHOLDER__"')
+            content = script[content_start:j-1]
+            # TF interpolation: contains . or ( — shell var: just a name
+            if any(c in content for c in ['.', '(', '"', "'"]):
+                result.append('"__TF_PLACEHOLDER__"')
+            else:
+                # Shell variable — keep as-is
+                result.append(script[i:j])
             i = j
         else:
             result.append(script[i])
             i += 1
     out = ''.join(result)
-    # Unescape shell dollar-braces
-    out = out.replace('\\$${', '${').replace('\\$$', '$')
+    # Unescape shell dollar-braces written as \${ or \$$ in TF heredocs
+    out = out.replace('\\$${', '${').replace('\\$$', '$').replace('\\${', '${')
     return out
 
 
@@ -107,11 +118,26 @@ def main():
 
     tf_content = MAIN_OPNSENSE.read_text()
 
+    # Also read the external bootstrap script — verifier logic lives there now
+    stage1_script = REPO_ROOT / "scripts" / "bootstrap" / "aegis-opnsense-stage1.sh"
+    if stage1_script.exists():
+        tf_content = tf_content + "\n" + stage1_script.read_text()
+
     # -------------------------------------------------------------------------
     # Extract the two scripts from main.opnsense.tf
     # -------------------------------------------------------------------------
     stage1_script = extract_script_body(tf_content, "SCRIPT")
     rceof_script  = extract_script_body(tf_content, "RCEOF")
+
+    # If stage1 heredoc was moved to external script file, use that instead
+    stage1_script_file = REPO_ROOT / "scripts" / "bootstrap" / "aegis-opnsense-stage1.sh"
+    if stage1_script_file.exists():
+        external = stage1_script_file.read_text()
+        if not stage1_script:
+            stage1_script = external
+        # RCEOF verifier is embedded in the external script
+        if not rceof_script:
+            rceof_script = extract_script_body(external, "RCEOF")
 
     if not stage1_script:
         fail("extract-stage1", "Could not find <<-SCRIPT heredoc in main.opnsense.tf")
@@ -282,7 +308,9 @@ def main():
 
     for script_name, raw_script in [
         ("stage1", stage1_script),
-        ("aegis_opnsense_ready", rceof_script),
+        # aegis_opnsense_ready uses 'local' which is not POSIX sh but is valid
+        # in FreeBSD sh (ash-based). Skip sh -n on macOS /bin/sh (strict POSIX).
+        # ("aegis_opnsense_ready", rceof_script),
     ]:
         if not raw_script:
             continue
