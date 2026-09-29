@@ -102,7 +102,7 @@ locals {
 
   # Stage-1 script URL — immutable GitHub raw URL at pinned Aegis fork SHA.
   # CustomScriptForLinux v1.x: fileUris + commandToExecute (not script).
-  aegis_fork_sha    = "df5704f90d23f15cb303430f271f09dc0c7f36f4"
+  aegis_fork_sha    = "d22cc19622b1244b732900613453e4a88f98ecde"
   stage1_script_url = "https://raw.githubusercontent.com/amediomediagroup/terraform-azurerm-avm-ptn-alz-connectivity-hub-and-spoke-vnet/${local.aegis_fork_sha}/scripts/bootstrap/aegis-opnsense-stage1.sh"
 }
 

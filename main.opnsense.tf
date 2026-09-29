@@ -35,7 +35,7 @@ locals {
   # Aegis fork SHA — pinned here to build immutable script URLs.
   # Update this when the fork SHA changes (same discipline as bootstrap_commit_sha).
   # Current: amediomediagroup fork, feat/opnsense-nva-root-integration branch.
-  aegis_fork_sha = "df5704f90d23f15cb303430f271f09dc0c7f36f4"
+  aegis_fork_sha = "d22cc19622b1244b732900613453e4a88f98ecde"
 
   # Raw GitHub URL for stage-1 bootstrap script (immutable at commit SHA).
   opnsense_stage1_script_base_url = "https://raw.githubusercontent.com/amediomediagroup/terraform-azurerm-avm-ptn-alz-connectivity-hub-and-spoke-vnet/${local.aegis_fork_sha}/scripts/bootstrap"
