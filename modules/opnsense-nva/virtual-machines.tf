@@ -48,6 +48,11 @@ resource "azapi_resource" "vm" {
         ]
       }
       userData = var.user_data
+      diagnosticsProfile = {
+        bootDiagnostics = {
+          enabled = true
+        }
+      }
     }
   }
 
